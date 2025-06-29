@@ -1,7 +1,6 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Boolean, Enum
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-import enum
 from ..core.database import Base
 
 class Doctor(Base):
@@ -23,4 +22,7 @@ class Doctor(Base):
     user = relationship("User", back_populates="doctor_profile")
     appointments = relationship("Appointment", back_populates="doctor")
     medical_records = relationship("MedicalRecord", back_populates="doctor")
-    prescriptions = relationship("Prescription", back_populates="doctor") 
+    prescriptions = relationship("Prescription", back_populates="doctor")
+    
+    def __repr__(self):
+        return f"<Doctor(id={self.id}, license='{self.license_number}', specialization='{self.specialization}')>" 

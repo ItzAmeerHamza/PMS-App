@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from . import models, schemas
+from ..core.models import User
 
 class PatientService:
     @staticmethod
@@ -12,8 +13,13 @@ class PatientService:
         return db.query(models.Patient).filter(models.Patient.id == patient_id).first()
     
     @staticmethod
-    def get_patient_by_email(db: Session, email: str) -> Optional[models.Patient]:
-        return db.query(models.Patient).filter(models.Patient.email == email).first()
+    def get_patient_by_user_id(db: Session, user_id: int) -> Optional[models.Patient]:
+        return db.query(models.Patient).filter(models.Patient.user_id == user_id).first()
+    
+    @staticmethod
+    def get_patient_with_user(db: Session, patient_id: int) -> Optional[models.Patient]:
+        """Get patient with user information"""
+        return db.query(models.Patient).filter(models.Patient.id == patient_id).first()
     
     @staticmethod
     def create_patient(db: Session, patient: schemas.PatientCreate) -> models.Patient:
@@ -45,8 +51,9 @@ class PatientService:
     
     @staticmethod
     def search_patients(db: Session, search_term: str) -> List[models.Patient]:
-        return db.query(models.Patient).filter(
-            models.Patient.first_name.ilike(f"%{search_term}%") |
-            models.Patient.last_name.ilike(f"%{search_term}%") |
-            models.Patient.email.ilike(f"%{search_term}%")
+        """Search patients by user information"""
+        return db.query(models.Patient).join(User).filter(
+            User.first_name.ilike(f"%{search_term}%") |
+            User.last_name.ilike(f"%{search_term}%") |
+            User.email.ilike(f"%{search_term}%")
         ).all() 

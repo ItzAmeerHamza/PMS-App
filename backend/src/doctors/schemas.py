@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+from ..core.schemas import User
 
 class DoctorBase(BaseModel):
     license_number: str
@@ -33,4 +34,4 @@ class Doctor(DoctorBase):
         from_attributes = True
 
 class DoctorWithUser(Doctor):
-    user: dict  # Will contain user information 
+    user: User  # Will contain user information 

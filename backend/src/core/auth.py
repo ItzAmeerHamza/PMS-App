@@ -6,7 +6,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from .database import get_db
-from ..models.user import User
+from .models import User
 from ..schemas.auth import TokenData
 from .config import settings
 
@@ -23,7 +23,7 @@ def authenticate_user(db: Session, username: str, password: str):
     user = db.query(User).filter(User.username == username).first()
     if not user:
         return False
-    if not verify_password(password, user.password):
+    if not verify_password(password, user.password_hash):
         return False
     return user
 
@@ -57,6 +57,6 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     return user
 
 async def get_current_active_user(current_user: User = Depends(get_current_user)):
-    if not current_user:
+    if not current_user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user 

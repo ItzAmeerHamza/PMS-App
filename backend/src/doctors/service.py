@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from . import models, schemas
-from ..core.database import get_db
+from ..core.models import User
 
 class DoctorService:
     @staticmethod
@@ -15,6 +15,11 @@ class DoctorService:
     @staticmethod
     def get_doctor_by_user_id(db: Session, user_id: int) -> Optional[models.Doctor]:
         return db.query(models.Doctor).filter(models.Doctor.user_id == user_id).first()
+    
+    @staticmethod
+    def get_doctor_with_user(db: Session, doctor_id: int) -> Optional[models.Doctor]:
+        """Get doctor with user information"""
+        return db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
     
     @staticmethod
     def create_doctor(db: Session, doctor: schemas.DoctorCreate) -> models.Doctor:
@@ -42,4 +47,11 @@ class DoctorService:
             db.delete(db_doctor)
             db.commit()
             return True
-        return False 
+        return False
+    
+    @staticmethod
+    def get_doctors_by_specialization(db: Session, specialization: str) -> List[models.Doctor]:
+        """Get doctors by specialization"""
+        return db.query(models.Doctor).filter(
+            models.Doctor.specialization.ilike(f"%{specialization}%")
+        ).all() 

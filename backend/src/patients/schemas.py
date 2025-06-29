@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import datetime, date
+from ..core.schemas import User
 
 class PatientBase(BaseModel):
     first_name: str
@@ -15,9 +16,11 @@ class PatientBase(BaseModel):
     blood_type: Optional[str] = None
     allergies: Optional[str] = None
     medical_history: Optional[str] = None
+    insurance_provider: Optional[str] = None
+    insurance_number: Optional[str] = None
 
 class PatientCreate(PatientBase):
-    pass
+    user_id: int
 
 class PatientUpdate(BaseModel):
     first_name: Optional[str] = None
@@ -32,13 +35,19 @@ class PatientUpdate(BaseModel):
     blood_type: Optional[str] = None
     allergies: Optional[str] = None
     medical_history: Optional[str] = None
+    insurance_provider: Optional[str] = None
+    insurance_number: Optional[str] = None
     is_active: Optional[bool] = None
 
 class Patient(PatientBase):
     id: int
+    user_id: int
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
 
     class Config:
-        from_attributes = True 
+        from_attributes = True
+
+class PatientWithUser(Patient):
+    user: User  # Will contain user information 
