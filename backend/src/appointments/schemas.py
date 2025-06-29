@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
-from ..models.appointment import AppointmentStatus, AppointmentType
+from .models import AppointmentStatus, AppointmentType
 
 class AppointmentBase(BaseModel):
     patient_id: int
