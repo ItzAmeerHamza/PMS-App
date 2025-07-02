@@ -23,7 +23,14 @@ const handleEvent = require('./back-end/events-handlers');
 let mainWindow;
 
 const createWindow = () => {
-  mainWindow = new BrowserWindow();
+  mainWindow = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
   mainWindow.maximize();
 
   const startUrl = process.env.ELECTRON_START_URL || url.format({
@@ -31,6 +38,8 @@ const createWindow = () => {
     protocol: 'file:',
     slashes: true,
   });
+
+  console.log('Loading URL:', startUrl);
 
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
