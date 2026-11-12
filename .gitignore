@@ -1,3 +1,8 @@
 node_modules/
 .env
+.venv/
 __pycache__/
+*.pyc
+backend/data/*.db
+desktop/dist/
+.DS_Store
