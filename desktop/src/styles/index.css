@@ -174,8 +174,44 @@ a {
 
 .main-tools {
   display: none;
-  justify-content: flex-end;
-  margin-bottom: 12px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  margin-bottom: 18px;
+}
+
+.top-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.top-nav a {
+  padding: 8px 12px;
+  border-radius: 999px;
+  color: var(--ink);
+}
+
+.top-nav a.active,
+.top-nav a:hover {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+
+.top-nav a.active {
+  background: var(--teal);
+  color: white;
+}
+
+.top-nav-end {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-inline-start: auto;
+}
+
+.top-nav-end .lang-switch {
+  margin-bottom: 0;
 }
 
 .login-screen {
@@ -220,8 +256,9 @@ a {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 16px;
+  gap: 16px 24px;
   margin-bottom: 22px;
+  flex-wrap: wrap;
 }
 
 .page-head h2 {
@@ -240,6 +277,13 @@ a {
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
+  flex: 1 1 280px;
+}
+
+.toolbar .search {
+  width: 260px;
+  max-width: 100%;
+  flex: 1 1 200px;
 }
 
 .import-lead {
@@ -341,6 +385,17 @@ tr.clickable:hover {
   cursor: pointer;
 }
 
+.qty-cell {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.qty-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -350,7 +405,11 @@ tr.clickable:hover {
   font-weight: 600;
 }
 
-.badge.low,
+.badge.low {
+  background: var(--rose-soft);
+  color: var(--rose);
+}
+
 .badge.recorded {
   background: var(--amber-soft);
   color: var(--amber);
@@ -572,7 +631,8 @@ textarea {
 }
 
 .search {
-  min-width: 240px;
+  width: 260px;
+  max-width: 100%;
 }
 
 .form-grid {
@@ -638,6 +698,11 @@ label span,
 
 .error {
   color: var(--rose);
+}
+
+.notice {
+  padding: 0 0 12px;
+  color: var(--green);
 }
 
 .row-actions {
@@ -778,7 +843,7 @@ html[dir="rtl"] .suggest-item.active {
   color: var(--muted);
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 860px) {
   .app-shell {
     grid-template-columns: 1fr;
   }
@@ -789,6 +854,7 @@ html[dir="rtl"] .suggest-item.active {
 
   .main-tools {
     display: flex;
+    flex-wrap: wrap;
   }
 
   .card-grid,
@@ -796,5 +862,83 @@ html[dir="rtl"] .suggest-item.active {
   .form-grid,
   .visit-layout {
     grid-template-columns: 1fr;
+  }
+}
+
+.print-sheet {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 16mm;
+  }
+
+  body {
+    background: white;
+  }
+
+  .sidebar,
+  .main-tools,
+  .screen-only {
+    display: none !important;
+  }
+
+  .app-shell {
+    display: block;
+  }
+
+  .main {
+    padding: 0;
+  }
+
+  .print-sheet {
+    display: block;
+    color: #111;
+  }
+
+  .print-head {
+    border-bottom: 2px solid #111;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+  }
+
+  .print-head h1 {
+    margin: 0 0 4px;
+    font-size: 22px;
+  }
+
+  .print-head p,
+  .print-sheet p {
+    margin: 0 0 6px;
+  }
+
+  .print-sheet h2 {
+    margin: 0 0 12px;
+    font-size: 18px;
+  }
+
+  .print-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 12px;
+  }
+
+  .print-sheet table th,
+  .print-sheet table td {
+    border-bottom: 1px solid #ccc;
+    padding: 8px 6px;
+  }
+
+  .print-sign {
+    margin-top: 48px;
+  }
+
+  .print-sign span {
+    display: inline-block;
+    min-width: 180px;
+    border-top: 1px solid #111;
+    padding-top: 6px;
   }
 }

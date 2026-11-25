@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
 
 const isDev = !app.isPackaged;
@@ -24,6 +24,38 @@ function createWindow() {
     win.loadFile(path.join(__dirname, "../dist/index.html"));
   }
 }
+
+ipcMain.handle("pharmacare:print", async (event) => {
+  const contents = event.sender;
+  let printers = [];
+  try {
+    printers = await contents.getPrintersAsync();
+  } catch {
+    return { ok: false, error: "The printer did not accept this prescription" };
+  }
+  const printer = printers.find((item) => item.isDefault) || printers[0];
+  if (!printer) {
+    return { ok: false, error: "No printer is attached" };
+  }
+  return new Promise((resolve) => {
+    contents.print(
+      {
+        silent: true,
+        printBackground: true,
+        deviceName: printer.name,
+        copies: 1,
+        pageSize: "A4",
+      },
+      (success, failureReason) => {
+        if (success) {
+          resolve({ ok: true, printer: printer.displayName || printer.name });
+          return;
+        }
+        resolve({ ok: false, error: failureReason || "The printer did not accept this prescription" });
+      },
+    );
+  });
+});
 
 app.whenReady().then(() => {
   createWindow();

@@ -267,8 +267,11 @@ export default function Inventory() {
                   </div>
                 </td>
                 <td>{row.manufacturer || "—"}</td>
-                <td>
-                  {row.quantity_on_hand} {row.is_low_stock && <span className="badge low">{t("status.low")}</span>}
+                <td className="qty-cell">
+                  <span className="qty-line">
+                    <span>{row.quantity_on_hand}</span>
+                    {row.is_low_stock && <span className="badge low">{t("status.low")}</span>}
+                  </span>
                 </td>
                 <td>{money(row.unit_price)}</td>
                 <td className="row-actions">

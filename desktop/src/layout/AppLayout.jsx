@@ -38,7 +38,20 @@ export default function AppLayout() {
       </aside>
       <main className="main">
         <div className="main-tools">
-          <LanguageSwitcher tone="light" />
+          <nav className="top-nav">
+            <NavLink to="/" end>
+              {t("nav.dashboard")}
+            </NavLink>
+            <NavLink to="/inventory">{t("nav.inventory")}</NavLink>
+            <NavLink to="/prescriptions">{t("nav.prescriptions")}</NavLink>
+            <NavLink to="/patients">{t("nav.patients")}</NavLink>
+          </nav>
+          <div className="top-nav-end">
+            <LanguageSwitcher tone="light" />
+            <button className="btn ghost" type="button" onClick={logout}>
+              {t("auth.signOut")}
+            </button>
+          </div>
         </div>
         <PharmacyContext.Provider value={pharmacy}>
           <Outlet />

@@ -99,6 +99,11 @@ const en = {
   "rxDetail.dose": "Dose",
   "rxDetail.dispense": "Dispense",
   "rxDetail.loading": "Loading prescription…",
+  "rxDetail.print": "Print",
+  "rxDetail.sentTo": "Sent to {name}",
+  "rxDetail.printTitle": "Prescription",
+  "rxDetail.signature": "Signature",
+  "rxDetail.license": "License {number}",
   "inv.lead": "Medicines in stock: name, salt, company, pack, and shelf location.",
   "inv.search": "Search name, salt, company, SKU",
   "inv.add": "Add medicine",
@@ -237,6 +242,8 @@ const en = {
   "error.csvValueLong": "A column value is too long",
   "error.csvTooMany": "Only 1000 rows can be imported at once",
   "error.pharmacyNotFound": "Pharmacy not found",
+  "error.noPrinter": "No printer is attached",
+  "error.printFailed": "The printer did not accept this prescription",
 };
 
 const ur = {
@@ -328,6 +335,11 @@ const ur = {
   "rxDetail.dose": "خوراک",
   "rxDetail.dispense": "دوا دیں",
   "rxDetail.loading": "نسخہ لوڈ ہو رہا ہے…",
+  "rxDetail.print": "پرنٹ",
+  "rxDetail.sentTo": "{name} پر بھیج دیا گیا",
+  "rxDetail.printTitle": "نسخہ",
+  "rxDetail.signature": "دستخط",
+  "rxDetail.license": "لائسنس {number}",
   "inv.lead": "اسٹاک میں دوائیں: نام، سالٹ، کمپنی، پیک اور شیلف۔",
   "inv.search": "نام، سالٹ، کمپنی یا ایس کے یو تلاش کریں",
   "inv.add": "دوا شامل کریں",
@@ -466,6 +478,8 @@ const ur = {
   "error.csvValueLong": "ایک کالم کی قیمت بہت لمبی ہے",
   "error.csvTooMany": "ایک بار میں صرف 1000 قطاریں درآمد ہو سکتی ہیں",
   "error.pharmacyNotFound": "فارمیسی نہیں ملی",
+  "error.noPrinter": "کوئی پرنٹر جڑا نہیں",
+  "error.printFailed": "پرنٹر نے یہ نسخہ قبول نہیں کیا",
 };
 
 const roman = {
@@ -557,6 +571,11 @@ const roman = {
   "rxDetail.dose": "Khurak",
   "rxDetail.dispense": "Dawai dein",
   "rxDetail.loading": "Nuskha load ho raha hai…",
+  "rxDetail.print": "Print karein",
+  "rxDetail.sentTo": "{name} par bhej diya gaya",
+  "rxDetail.printTitle": "Nuskha",
+  "rxDetail.signature": "Dastakhat",
+  "rxDetail.license": "License {number}",
   "inv.lead": "Stock mein dawaiyan: naam, salt, company, pack aur shelf.",
   "inv.search": "Naam, salt, company ya SKU talash karein",
   "inv.add": "Dawai shamil karein",
@@ -695,6 +714,8 @@ const roman = {
   "error.csvValueLong": "Aik column ki value bohat lambi hai",
   "error.csvTooMany": "Aik dafa mein sirf 1000 rows import ho sakti hain",
   "error.pharmacyNotFound": "Pharmacy nahi mili",
+  "error.noPrinter": "Koi printer juda nahi",
+  "error.printFailed": "Printer ne ye nuskha qabool nahi kiya",
 };
 
 export const catalogs = { en, ur, roman };
@@ -735,6 +756,8 @@ const EXACT_ERRORS = {
   "A column value is too long": "error.csvValueLong",
   "Only 1000 rows can be imported at once": "error.csvTooMany",
   "Pharmacy not found": "error.pharmacyNotFound",
+  "No printer is attached": "error.noPrinter",
+  "The printer did not accept this prescription": "error.printFailed",
   "Those medicines are no longer active in the store.": "script.inactiveReuse",
 };
 
