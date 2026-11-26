@@ -6,3 +6,7 @@ __pycache__/
 backend/data/*.db
 desktop/dist/
 .DS_Store
+backend/data/backups/
+backend/data/*.db-wal
+backend/data/*.db-shm
+backend/data/*.before-restore-*

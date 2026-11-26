@@ -23,6 +23,7 @@ export default function AppLayout() {
           <NavLink to="/" end>
             {t("nav.dashboard")}
           </NavLink>
+          <NavLink to="/billing">{t("nav.billing")}</NavLink>
           <NavLink to="/inventory">{t("nav.inventory")}</NavLink>
           <NavLink to="/prescriptions">{t("nav.prescriptions")}</NavLink>
           <NavLink to="/patients">{t("nav.patients")}</NavLink>
@@ -42,6 +43,7 @@ export default function AppLayout() {
             <NavLink to="/" end>
               {t("nav.dashboard")}
             </NavLink>
+            <NavLink to="/billing">{t("nav.billing")}</NavLink>
             <NavLink to="/inventory">{t("nav.inventory")}</NavLink>
             <NavLink to="/prescriptions">{t("nav.prescriptions")}</NavLink>
             <NavLink to="/patients">{t("nav.patients")}</NavLink>

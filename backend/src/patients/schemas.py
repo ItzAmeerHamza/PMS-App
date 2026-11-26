@@ -31,6 +31,7 @@ class PatientOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    public_id: Optional[str] = None
     pharmacy_id: int
     first_name: str
     last_name: str
@@ -41,7 +42,10 @@ class PatientOut(BaseModel):
     allergies: Optional[str] = None
     notes: Optional[str] = None
     prescription_count: int = 0
+    is_repeat_visitor: bool = False
     last_visit: Optional[datetime] = None
+    deleted: bool = False
+    deleted_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
 

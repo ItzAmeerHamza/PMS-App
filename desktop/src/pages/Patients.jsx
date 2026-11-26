@@ -94,7 +94,12 @@ export default function Patients() {
           <tbody>
             {rows.map((row) => (
               <tr key={row.id} className="clickable" onClick={() => navigate(`/patients/${row.id}`)}>
-                <td>{fullName(row)}</td>
+                <td>
+                  {fullName(row)}
+                  <span className={`badge tag ${row.is_repeat_visitor ? "ok" : "inactive"}`}>
+                    {row.is_repeat_visitor ? t("patients.returning") : t("patients.new")}
+                  </span>
+                </td>
                 <td>{row.phone}</td>
                 <td>{row.allergies || "—"}</td>
                 <td>{row.prescription_count}</td>

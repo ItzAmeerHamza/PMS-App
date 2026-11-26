@@ -1,18 +1,160 @@
 import csv
 import io
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from .. import models
+from ..core.audit import record_audit
+from ..core.transaction import business_transaction
 from . import schemas
 
 
 def _quantity_on_hand(medicine: models.Medicine) -> int:
     return sum(batch.quantity for batch in medicine.batches)
+
+
+def _sellable_quantity(medicine: models.Medicine) -> int:
+    today = date.today()
+    return sum(batch.quantity for batch in medicine.batches if batch.expiry_date >= today)
+
+
+def _utc_now_naive() -> datetime:
+    """UTC with microseconds, stored without an offset (SQLite has no time zones)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def change_batch_quantity(
+    db: Session,
+    batch: models.StockBatch,
+    delta: int,
+    movement_type: str,
+    *,
+    reason: str | None = None,
+    source_type: str | None = None,
+    source_id: int | None = None,
+) -> models.StockMovement:
+    """The only way the app changes stock_batches.quantity.
+
+    Changes the batch and appends one stock_movements row. The caller owns the
+    transaction (business_transaction), so the two commit or roll back together.
+    Phase 06 adds the outbox event in that same transaction.
+    """
+    if delta == 0:
+        raise ValueError("Quantity change must not be zero")
+    if movement_type not in models.MOVEMENT_TYPES:
+        raise ValueError(f"Unknown stock movement type: {movement_type}")
+    next_qty = batch.quantity + delta
+    if next_qty < 0:
+        raise ValueError("Adjustment would make quantity negative")
+    batch.quantity = next_qty
+    movement = models.StockMovement(
+        pharmacy_id=batch.medicine.pharmacy_id,
+        medicine_id=batch.medicine_id,
+        batch_id=batch.id,
+        staff_id=db.info.get("staff_id"),
+        movement_type=movement_type,
+        quantity_delta=delta,
+        quantity_after=next_qty,
+        reason=reason,
+        source_type=source_type,
+        source_id=source_id,
+        created_at=_utc_now_naive(),
+    )
+    db.add(movement)
+    return movement
+
+
+def receive_new_batch(db: Session, medicine: models.Medicine, data: dict, *, source_type: str = "batch") -> models.StockBatch:
+    """Create a batch and record its starting quantity as a receipt movement."""
+    fields = dict(data)
+    quantity = int(fields.pop("quantity", 0) or 0)
+    batch = models.StockBatch(medicine_id=medicine.id, quantity=0, **fields)
+    db.add(batch)
+    db.flush()
+    if quantity:
+        change_batch_quantity(db, batch, quantity, "receipt", source_type=source_type, source_id=batch.id)
+    return batch
+
+
+def allocate_stock(
+    db: Session,
+    medicine: models.Medicine,
+    quantity: int,
+    movement_type: str,
+    *,
+    source_type: str,
+    source_id: int,
+) -> list[tuple[models.StockBatch, int]]:
+    """Take `quantity` units from unexpired batches, earliest expiry first.
+
+    Writes one movement per batch touched. Returns (batch, units taken) pairs.
+    Raises ValueError before changing anything when unexpired stock is short.
+    """
+    batches = (
+        db.query(models.StockBatch)
+        .filter(
+            models.StockBatch.medicine_id == medicine.id,
+            models.StockBatch.quantity > 0,
+            models.StockBatch.expiry_date >= date.today(),
+        )
+        .order_by(models.StockBatch.expiry_date.asc(), models.StockBatch.id.asc())
+        .all()
+    )
+    if sum(batch.quantity for batch in batches) < quantity:
+        raise ValueError(f"Insufficient stock for {medicine.name}")
+    allocations = []
+    remaining = quantity
+    for batch in batches:
+        if remaining <= 0:
+            break
+        taken = min(remaining, batch.quantity)
+        change_batch_quantity(db, batch, -taken, movement_type, source_type=source_type, source_id=source_id)
+        remaining -= taken
+        allocations.append((batch, taken))
+    return allocations
+
+
+def serialize_movement(movement: models.StockMovement, staff_names: dict[int, str] | None = None) -> dict:
+    batch = movement.batch
+    created = movement.created_at
+    if created is not None and created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return {
+        "id": movement.id,
+        "public_id": movement.public_id,
+        "medicine_id": movement.medicine_id,
+        "batch_id": movement.batch_id,
+        "batch_number": batch.batch_number if batch else None,
+        "expiry_date": batch.expiry_date if batch else None,
+        "movement_type": movement.movement_type,
+        "quantity_delta": movement.quantity_delta,
+        "quantity_after": movement.quantity_after,
+        "reason": movement.reason,
+        "source_type": movement.source_type,
+        "source_id": movement.source_id,
+        "staff_name": (staff_names or {}).get(movement.staff_id),
+        "created_at": created,
+    }
+
+
+def list_movements(db: Session, medicine_id: int) -> list[dict] | None:
+    """Movement history for one product, oldest first. Ties on time keep insert order."""
+    if not db.query(models.Medicine.id).filter(models.Medicine.id == medicine_id).first():
+        return None
+    movements = (
+        db.query(models.StockMovement)
+        .options(joinedload(models.StockMovement.batch))
+        .filter(models.StockMovement.medicine_id == medicine_id)
+        .order_by(models.StockMovement.created_at.asc(), models.StockMovement.id.asc())
+        .all()
+    )
+    staff_ids = {m.staff_id for m in movements if m.staff_id}
+    names = dict(db.query(models.Staff.id, models.Staff.full_name).filter(models.Staff.id.in_(staff_ids)).all()) if staff_ids else {}
+    return [serialize_movement(movement, names) for movement in movements]
 
 
 def _nearest_expiry(medicine: models.Medicine) -> date | None:
@@ -94,6 +236,7 @@ def serialize_medicine(medicine: models.Medicine) -> dict:
         "notes": medicine.notes,
         "is_active": medicine.is_active,
         "quantity_on_hand": quantity,
+        "sellable_quantity": _sellable_quantity(medicine),
         "is_low_stock": quantity <= medicine.reorder_level,
         "nearest_expiry": _nearest_expiry(medicine),
         "batches": [serialize_batch(batch) for batch in medicine.batches],
@@ -130,12 +273,14 @@ def get_medicine(db: Session, medicine_id: int) -> models.Medicine | None:
 
 def create_medicine(db: Session, payload: schemas.MedicineCreate) -> models.Medicine:
     data = _prepare_medicine_fields(payload.model_dump(exclude={"initial_batch"}))
-    medicine = models.Medicine(**data)
-    db.add(medicine)
-    db.flush()
-    if payload.initial_batch:
-        db.add(models.StockBatch(medicine_id=medicine.id, **payload.initial_batch.model_dump()))
-    db.commit()
+    with business_transaction(db):
+        medicine = models.Medicine(**data)
+        db.add(medicine)
+        db.flush()
+        record_audit(db, "medicine.created", pharmacy_id=medicine.pharmacy_id, entity_type="medicine", entity_public_id=medicine.public_id)
+        if payload.initial_batch:
+            batch = receive_new_batch(db, medicine, payload.initial_batch.model_dump())
+            record_audit(db, "batch.created", pharmacy_id=medicine.pharmacy_id, entity_type="stock_batch", entity_public_id=batch.public_id)
     return get_medicine(db, medicine.id)
 
 
@@ -143,9 +288,10 @@ def update_medicine(db: Session, medicine_id: int, payload: schemas.MedicineUpda
     medicine = get_medicine(db, medicine_id)
     if not medicine:
         return None
-    for field, value in _prepare_medicine_fields(payload.model_dump(exclude_unset=True)).items():
-        setattr(medicine, field, value)
-    db.commit()
+    with business_transaction(db):
+        for field, value in _prepare_medicine_fields(payload.model_dump(exclude_unset=True)).items():
+            setattr(medicine, field, value)
+        record_audit(db, "medicine.updated", pharmacy_id=medicine.pharmacy_id, entity_type="medicine", entity_public_id=medicine.public_id)
     return get_medicine(db, medicine_id)
 
 
@@ -160,8 +306,14 @@ def delete_medicine(db: Session, medicine_id: int) -> bool:
     )
     if in_use:
         raise ValueError("This medicine is on a prescription. Mark it inactive instead of deleting it.")
-    db.delete(medicine)
-    db.commit()
+    if db.query(models.SaleItem).filter(models.SaleItem.medicine_id == medicine_id).first():
+        raise ValueError("This medicine is on a bill. Mark it inactive instead of deleting it.")
+    if db.query(models.StockMovement.id).filter(models.StockMovement.medicine_id == medicine_id).first():
+        # The ledger is append-only; deleting the product would delete its history.
+        raise ValueError("This medicine has stock history. Mark it inactive instead of deleting it.")
+    with business_transaction(db):
+        record_audit(db, "medicine.deleted", pharmacy_id=medicine.pharmacy_id, entity_type="medicine", entity_public_id=medicine.public_id)
+        db.delete(medicine)
     return True
 
 
@@ -169,9 +321,9 @@ def add_batch(db: Session, medicine_id: int, payload: schemas.StockBatchCreate) 
     medicine = get_medicine(db, medicine_id)
     if not medicine:
         return None
-    batch = models.StockBatch(medicine_id=medicine_id, **payload.model_dump())
-    db.add(batch)
-    db.commit()
+    with business_transaction(db):
+        batch = receive_new_batch(db, medicine, payload.model_dump())
+        record_audit(db, "batch.created", pharmacy_id=medicine.pharmacy_id, entity_type="stock_batch", entity_public_id=batch.public_id)
     db.refresh(batch)
     return batch
 
@@ -180,11 +332,16 @@ def adjust_batch(db: Session, batch_id: int, payload: schemas.StockAdjust) -> mo
     batch = db.query(models.StockBatch).filter(models.StockBatch.id == batch_id).first()
     if not batch:
         return None
-    next_qty = batch.quantity + payload.quantity_delta
-    if next_qty < 0:
-        raise ValueError("Adjustment would make quantity negative")
-    batch.quantity = next_qty
-    db.commit()
+    with business_transaction(db):
+        change_batch_quantity(
+            db,
+            batch,
+            payload.quantity_delta,
+            "adjustment",
+            reason=payload.reason,
+            source_type="adjustment",
+        )
+        record_audit(db, "batch.adjusted", pharmacy_id=batch.medicine.pharmacy_id, entity_type="stock_batch", entity_public_id=batch.public_id)
     db.refresh(batch)
     return batch
 
@@ -434,6 +591,14 @@ def import_medicines_csv(db: Session, pharmacy_id: int, raw: bytes) -> dict:
         raise ValueError("The CSV needs name and sku columns")
 
     seen = {sku.casefold() for (sku,) in db.query(models.Medicine.sku).filter(models.Medicine.pharmacy_id == pharmacy_id)}
+    with business_transaction(db):
+        result = _import_rows(db, pharmacy_id, reader, columns, seen)
+        if result["created"]:
+            record_audit(db, "medicine.imported", pharmacy_id=pharmacy_id, entity_type="medicine")
+    return result
+
+
+def _import_rows(db: Session, pharmacy_id: int, reader, columns: dict[str, str], seen: set[str]) -> dict:
     created = 0
     skipped = []
     errors = []
@@ -462,12 +627,11 @@ def import_medicines_csv(db: Session, pharmacy_id: int, raw: bytes) -> dict:
                 db.add(medicine)
                 db.flush()
                 if batch:
-                    db.add(models.StockBatch(medicine_id=medicine.id, **batch))
+                    receive_new_batch(db, medicine, batch, source_type="import")
                     db.flush()
         except IntegrityError:
             skipped.append({"row": index, "sku": fields["sku"], "name": fields["name"], "message": "SKU already exists for this pharmacy"})
             continue
         seen.add(key)
         created += 1
-    db.commit()
     return {"created": created, "skipped": skipped, "errors": errors}

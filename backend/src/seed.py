@@ -3,100 +3,14 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from . import models
-
-
-SAMPLE_DETAILS = {
-    "PCM-500": {
-        "salt": "Paracetamol",
-        "pack_size": "Strip of 10",
-        "rack_location": "A-01",
-        "barcode": "8901001000011",
-        "requires_prescription": False,
-    },
-    "AMX-250": {
-        "salt": "Amoxicillin trihydrate",
-        "pack_size": "Strip of 10",
-        "rack_location": "A-04",
-        "barcode": "8901001000028",
-        "requires_prescription": True,
-    },
-    "CTZ-10": {
-        "salt": "Cetirizine hydrochloride",
-        "pack_size": "Strip of 10",
-        "rack_location": "B-02",
-        "barcode": "8901001000035",
-        "requires_prescription": False,
-    },
-    "OME-20": {
-        "salt": "Omeprazole",
-        "pack_size": "Strip of 15",
-        "rack_location": "A-08",
-        "barcode": "8901001000042",
-        "requires_prescription": True,
-    },
-    "MET-500": {
-        "salt": "Metformin hydrochloride",
-        "pack_size": "Strip of 10",
-        "rack_location": "C-01",
-        "barcode": "8901001000059",
-        "requires_prescription": True,
-    },
-    "AZI-500": {
-        "salt": "Azithromycin dihydrate",
-        "pack_size": "Strip of 3",
-        "rack_location": "A-06",
-        "barcode": "8901001000066",
-        "requires_prescription": True,
-    },
-    "IBU-400": {
-        "salt": "Ibuprofen",
-        "pack_size": "Strip of 10",
-        "rack_location": "B-05",
-        "barcode": "8901001000073",
-        "requires_prescription": False,
-    },
-    "ORS-01": {
-        "salt": "Oral rehydration salts",
-        "pack_size": "Single sachet",
-        "rack_location": "D-01",
-        "barcode": "8901001000080",
-        "requires_prescription": False,
-    },
-}
-
-
-def backfill_medicine_details(db: Session) -> None:
-    """Fill catalog details on the sample medicines when those fields are still empty."""
-    changed = False
-    for sku, details in SAMPLE_DETAILS.items():
-        medicine = db.query(models.Medicine).filter(models.Medicine.sku == sku).first()
-        if not medicine or medicine.pack_size:
-            continue
-        for field, value in details.items():
-            setattr(medicine, field, value)
-        changed = True
-    if changed:
-        db.commit()
-
-
-def backfill_visit_details(db: Session) -> None:
-    """Fill the complaint on the sample visits when that field is still empty."""
-    complaints = {
-        "Viral fever": "Fever and body ache",
-        "Type 2 diabetes follow-up": "Follow-up for blood sugar",
-    }
-    changed = False
-    visits = db.query(models.Prescription).filter(models.Prescription.complaint.is_(None)).all()
-    for visit in visits:
-        complaint = complaints.get(visit.diagnosis or "")
-        if complaint:
-            visit.complaint = complaint
-            changed = True
-    if changed:
-        db.commit()
+from .inventory.service import receive_new_batch
 
 
 def seed_if_empty(db: Session) -> None:
+    """Development sample data. Runs only when PHARMACARE_DEMO_DATA=1 and the pharmacy table is empty.
+
+    It creates no staff account: first-run setup asks for a manager password.
+    """
     if db.query(models.Pharmacy).first():
         return
 
@@ -272,7 +186,7 @@ def seed_if_empty(db: Session) -> None:
         db.flush()
         medicines[medicine.sku] = medicine
         for batch in batches:
-            db.add(models.StockBatch(medicine_id=medicine.id, **batch))
+            receive_new_batch(db, medicine, batch, source_type="seed")
 
     patients = [
         models.Patient(

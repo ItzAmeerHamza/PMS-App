@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class StockBatchCreate(BaseModel):
@@ -27,8 +27,40 @@ class StockBatchOut(BaseModel):
 
 
 class StockAdjust(BaseModel):
+    quantity_delta: int = Field(description="Signed change; must not be zero")
+    reason: str = Field(min_length=1, max_length=255, description="Why the stock changed, e.g. damaged, count correction")
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Enter a reason for the adjustment")
+        return value
+
+    @field_validator("quantity_delta")
+    @classmethod
+    def _delta_not_zero(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("Quantity change must not be zero")
+        return value
+
+
+class StockMovementOut(BaseModel):
+    id: int
+    public_id: str
+    medicine_id: int
+    batch_id: int
+    batch_number: Optional[str] = None
+    expiry_date: Optional[date] = None
+    movement_type: str
     quantity_delta: int
+    quantity_after: int
     reason: Optional[str] = None
+    source_type: Optional[str] = None
+    source_id: Optional[int] = None
+    staff_name: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 
 class MedicineCreate(BaseModel):
@@ -106,6 +138,7 @@ class MedicineOut(BaseModel):
     notes: Optional[str] = None
     is_active: bool
     quantity_on_hand: int = 0
+    sellable_quantity: int = 0
     is_low_stock: bool = False
     nearest_expiry: Optional[date] = None
     batches: list[StockBatchOut] = []

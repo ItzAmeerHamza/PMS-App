@@ -3,8 +3,9 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { localizeError } from "../i18n/catalog";
 import { useI18n } from "../i18n/LanguageContext.jsx";
-import { formatDate } from "../lib/format";
+import { formatDate, money, startOfDay } from "../lib/format";
 import { usePharmacy } from "../layout/PharmacyContext";
+import { isExpired } from "../components/StockPanel";
 
 export default function Dashboard() {
   const pharmacy = usePharmacy();
@@ -15,7 +16,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!pharmacy) return;
     api
-      .dashboard(pharmacy.id)
+      .dashboard(pharmacy.id, startOfDay())
       .then(setData)
       .catch((err) => setError(err.message));
   }, [pharmacy]);
@@ -29,12 +30,22 @@ export default function Dashboard() {
           <h2>{t("nav.dashboard")}</h2>
           <p>{t("dash.lead", { name: pharmacy.name })}</p>
         </div>
-        <Link className="btn" to="/prescriptions/new">
-          {t("dash.newPrescription")}
-        </Link>
+        <div className="toolbar">
+          <Link className="btn ghost" to="/prescriptions/new">
+            {t("dash.newPrescription")}
+          </Link>
+          <Link className="btn" to="/billing/new">
+            {t("dash.newBill")}
+          </Link>
+        </div>
       </div>
 
       <div className="card-grid">
+        <Link className="stat-card stat-link" to="/billing">
+          <span>{t("dash.todaySales")}</span>
+          <strong>{money(data.today_sales_total)}</strong>
+          <span>{t("dash.todayBills", { n: data.today_sales_count })}</span>
+        </Link>
         <div className="stat-card">
           <span>{t("dash.medicines")}</span>
           <strong>{data.medicine_count}</strong>
@@ -98,7 +109,10 @@ export default function Dashboard() {
                   <tr key={item.id}>
                     <td>{item.medicine_name}</td>
                     <td>{item.batch_number}</td>
-                    <td>{formatDate(item.expiry_date)}</td>
+                    <td>
+                      {formatDate(item.expiry_date)}
+                      {isExpired(item.expiry_date) && <span className="badge danger tag">{t("status.expired")}</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

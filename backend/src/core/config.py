@@ -5,7 +5,8 @@ class Settings(BaseSettings):
     app_name: str = "PharmaCare API"
     app_version: str = "0.1.0"
     debug: bool = True
-    database_url: str = "sqlite:///./data/pharmacy.db"
+    # Not used: the SQLite location comes from src/core/paths.py. Kept so an old .env still loads.
+    database_url: str = ""
     cors_origins: str = "*"
 
     class Config:

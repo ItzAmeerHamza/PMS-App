@@ -3,6 +3,10 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session, joinedload
 
 from .. import models
+from ..core.audit import record_audit
+from ..core.scope import signed_in_pharmacy, visible
+from ..core.transaction import business_transaction
+from ..inventory.service import allocate_stock
 from . import schemas
 
 
@@ -43,6 +47,7 @@ def serialize_prescription(prescription: models.Prescription) -> dict:
         "status": prescription.status,
         "prescribed_at": prescription.prescribed_at,
         "dispensed_at": prescription.dispensed_at,
+        "sale_id": next((sale.id for sale in prescription.sales if sale.status == "paid"), None),
         "items": [
             {
                 "id": item.id,
@@ -72,53 +77,72 @@ def list_prescriptions(
     pharmacy_id: int,
     patient_id: int | None = None,
     status: str | None = None,
+    order: str = "desc",
 ) -> list[dict]:
+    """Prescriptions of the signed-in pharmacy.
+
+    order="asc" is the patient's history, oldest first; "desc" (default) is the newest-first
+    worklist. Ties on prescribed_at fall back to id, so the order is stable.
+    """
+    pharmacy_id = signed_in_pharmacy(db, pharmacy_id)
     query = _query(db).filter(models.Prescription.pharmacy_id == pharmacy_id)
     if patient_id:
         query = query.filter(models.Prescription.patient_id == patient_id)
     if status:
         query = query.filter(models.Prescription.status == status)
-    return [serialize_prescription(rx) for rx in query.order_by(models.Prescription.prescribed_at.desc()).all()]
+    if order == "asc":
+        query = query.order_by(models.Prescription.prescribed_at.asc(), models.Prescription.id.asc())
+    else:
+        query = query.order_by(models.Prescription.prescribed_at.desc(), models.Prescription.id.desc())
+    return [serialize_prescription(rx) for rx in query.all()]
 
 
 def get_prescription(db: Session, prescription_id: int) -> models.Prescription | None:
-    return _query(db).filter(models.Prescription.id == prescription_id).first()
+    """None for another pharmacy's prescription, as if it did not exist."""
+    prescription = _query(db).filter(models.Prescription.id == prescription_id).first()
+    if prescription is None or not visible(db, prescription.pharmacy_id):
+        return None
+    return prescription
 
 
 def create_prescription(db: Session, payload: schemas.PrescriptionCreate) -> models.Prescription:
+    pharmacy_id = signed_in_pharmacy(db, payload.pharmacy_id)
     patient = db.query(models.Patient).filter(models.Patient.id == payload.patient_id).first()
-    if not patient or patient.pharmacy_id != payload.pharmacy_id:
+    if not patient or patient.pharmacy_id != pharmacy_id or patient.deleted_at is not None:
         raise ValueError("Patient not found")
     if not payload.items:
         raise ValueError("Add at least one medicine from the store")
 
-    prescription = models.Prescription(
-        pharmacy_id=payload.pharmacy_id,
-        patient_id=payload.patient_id,
-        doctor_name=_blank(payload.doctor_name),
-        complaint=_blank(payload.complaint),
-        diagnosis=_blank(payload.diagnosis),
-        notes=_blank(payload.notes),
-        status="recorded",
-    )
-    db.add(prescription)
-    db.flush()
-    for item in payload.items:
-        medicine = db.query(models.Medicine).filter(models.Medicine.id == item.medicine_id).first()
-        if not medicine or medicine.pharmacy_id != payload.pharmacy_id:
-            raise ValueError("Select a medicine from this store")
-        if not medicine.is_active:
-            raise ValueError(f"{medicine.name} is inactive")
-        db.add(
-            models.PrescriptionItem(
-                prescription_id=prescription.id,
-                **item.model_dump(),
-                medicine_name=medicine.name,
-                medicine_salt=medicine.salt or medicine.generic_name,
-                medicine_company=medicine.manufacturer,
-            )
+    with business_transaction(db):
+        prescription = models.Prescription(
+            pharmacy_id=pharmacy_id,
+            # Python-side UTC with microseconds: two visits in the same second still sort correctly.
+            prescribed_at=datetime.now(timezone.utc),
+            patient_id=payload.patient_id,
+            doctor_name=_blank(payload.doctor_name),
+            complaint=_blank(payload.complaint),
+            diagnosis=_blank(payload.diagnosis),
+            notes=_blank(payload.notes),
+            status="recorded",
         )
-    db.commit()
+        db.add(prescription)
+        db.flush()
+        for item in payload.items:
+            medicine = db.query(models.Medicine).filter(models.Medicine.id == item.medicine_id).first()
+            if not medicine or medicine.pharmacy_id != pharmacy_id:
+                raise ValueError("Select a medicine from this store")
+            if not medicine.is_active:
+                raise ValueError(f"{medicine.name} is inactive")
+            db.add(
+                models.PrescriptionItem(
+                    prescription_id=prescription.id,
+                    **item.model_dump(),
+                    medicine_name=medicine.name,
+                    medicine_salt=medicine.salt or medicine.generic_name,
+                    medicine_company=medicine.manufacturer,
+                )
+            )
+        record_audit(db, "prescription.created", pharmacy_id=prescription.pharmacy_id, entity_type="prescription", entity_public_id=prescription.public_id)
     return get_prescription(db, prescription.id)
 
 
@@ -128,8 +152,9 @@ def cancel_prescription(db: Session, prescription_id: int) -> models.Prescriptio
         return None
     if prescription.status == "dispensed":
         raise ValueError("Cannot cancel a dispensed prescription")
-    prescription.status = "cancelled"
-    db.commit()
+    with business_transaction(db):
+        prescription.status = "cancelled"
+        record_audit(db, "prescription.cancelled", pharmacy_id=prescription.pharmacy_id, entity_type="prescription", entity_public_id=prescription.public_id)
     return get_prescription(db, prescription_id)
 
 
@@ -140,25 +165,10 @@ def dispense_prescription(db: Session, prescription_id: int) -> models.Prescript
     if prescription.status != "recorded":
         raise ValueError("Only recorded prescriptions can be dispensed")
 
-    for item in prescription.items:
-        remaining = item.quantity
-        batches = (
-            db.query(models.StockBatch)
-            .filter(models.StockBatch.medicine_id == item.medicine_id, models.StockBatch.quantity > 0)
-            .order_by(models.StockBatch.expiry_date.asc())
-            .all()
-        )
-        for batch in batches:
-            if remaining <= 0:
-                break
-            taken = min(remaining, batch.quantity)
-            batch.quantity -= taken
-            remaining -= taken
-        if remaining > 0:
-            name = item.medicine.name if item.medicine else str(item.medicine_id)
-            raise ValueError(f"Insufficient stock for {name}")
-
-    prescription.status = "dispensed"
-    prescription.dispensed_at = datetime.now(timezone.utc)
-    db.commit()
+    with business_transaction(db):
+        for item in prescription.items:
+            allocate_stock(db, item.medicine, item.quantity, "dispense", source_type="prescription", source_id=prescription.id)
+        prescription.status = "dispensed"
+        prescription.dispensed_at = datetime.now(timezone.utc)
+        record_audit(db, "prescription.dispensed", pharmacy_id=prescription.pharmacy_id, entity_type="prescription", entity_public_id=prescription.public_id)
     return get_prescription(db, prescription_id)

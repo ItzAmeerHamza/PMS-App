@@ -1,95 +1,73 @@
+"""SQLite engine, sessions, and connection settings.
+
+Schema changes live in ``backend/migrations`` (Alembic). This module never creates
+or alters tables; see ``core/migrate.py`` for the startup upgrade.
+"""
+
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from fastapi import Request
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-from .config import settings
+from .paths import database_path
 
-if settings.database_url.startswith("sqlite"):
-    data_dir = Path(__file__).resolve().parents[2] / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    db_path = data_dir / "pharmacy.db"
-    database_url = f"sqlite:///{db_path}"
-    connect_args = {"check_same_thread": False}
-else:
-    database_url = settings.database_url
-    connect_args = {}
-
-engine = create_engine(database_url, connect_args=connect_args)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+SessionLocal = sessionmaker(autocommit=False, autoflush=False)
+
+_engine: Engine | None = None
 
 
-MEDICINE_COLUMN_DDL = {
-    "salt": "VARCHAR(255)",
-    "pack_size": "VARCHAR(80)",
-    "rack_location": "VARCHAR(80)",
-    "barcode": "VARCHAR(64)",
-    "requires_prescription": "BOOLEAN DEFAULT 0",
-    "notes": "TEXT",
-}
+def _sqlite_pragmas(dbapi_connection, _record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
 
 
-def _add_columns(connection, inspector, table: str, columns: dict[str, str]) -> None:
-    if table not in inspector.get_table_names():
-        return
-    existing = {column["name"] for column in inspector.get_columns(table)}
-    for name, ddl in columns.items():
-        if name not in existing:
-            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+def init_engine(path: Path | None = None) -> Engine:
+    """Create the engine for ``path`` (default: the configured data dir) and bind sessions to it."""
+    global _engine
+    if _engine is not None:
+        _engine.dispose()
+    db_file = Path(path) if path else database_path()
+    db_file.parent.mkdir(parents=True, exist_ok=True)
+    engine = create_engine(
+        f"sqlite:///{db_file}",
+        connect_args={"check_same_thread": False},
+        # SQL errors must not echo row values (patient names, phones) into logs.
+        hide_parameters=True,
+    )
+    event.listen(engine, "connect", _sqlite_pragmas)
+    SessionLocal.configure(bind=engine)
+    _engine = engine
+    return engine
 
 
-def ensure_schema() -> None:
-    """Create tables, then add columns on databases created before later catalog fields."""
-    Base.metadata.create_all(bind=engine)
-    inspector = inspect(engine)
-    with engine.begin() as connection:
-        _add_columns(connection, inspector, "medicines", MEDICINE_COLUMN_DDL)
-        _add_columns(connection, inspector, "prescriptions", {"complaint": "VARCHAR(500)"})
-        _add_columns(
-            connection,
-            inspector,
-            "prescription_items",
-            {
-                "medicine_name": "VARCHAR(255)",
-                "medicine_salt": "VARCHAR(255)",
-                "medicine_company": "VARCHAR(255)",
-            },
-        )
-        if "medicines" in inspector.get_table_names():
-            connection.execute(
-                text(
-                    "UPDATE medicines SET salt = generic_name "
-                    "WHERE salt IS NULL AND generic_name IS NOT NULL"
-                )
-            )
-        if "prescription_items" in inspector.get_table_names():
-            connection.execute(
-                text(
-                    "UPDATE prescription_items SET medicine_name = ("
-                    "SELECT name FROM medicines WHERE medicines.id = prescription_items.medicine_id"
-                    ") WHERE medicine_name IS NULL"
-                )
-            )
-            connection.execute(
-                text(
-                    "UPDATE prescription_items SET medicine_salt = ("
-                    "SELECT COALESCE(salt, generic_name) FROM medicines "
-                    "WHERE medicines.id = prescription_items.medicine_id"
-                    ") WHERE medicine_salt IS NULL"
-                )
-            )
-            connection.execute(
-                text(
-                    "UPDATE prescription_items SET medicine_company = ("
-                    "SELECT manufacturer FROM medicines WHERE medicines.id = prescription_items.medicine_id"
-                    ") WHERE medicine_company IS NULL"
-                )
-            )
+def get_engine() -> Engine:
+    if _engine is None:
+        return init_engine()
+    return _engine
 
 
-def get_db():
+def engine_path() -> Path:
+    return Path(get_engine().url.database)
+
+
+def get_db(request: Request):
+    """One session per request, closed afterwards.
+
+    The signed-in staff id and that manager's pharmacy (set by the auth middleware)
+    ride on the session, so audit rows know who acted and services can scope
+    reads and writes to the signed-in pharmacy.
+    """
+    get_engine()
     db = SessionLocal()
+    db.info["staff_id"] = getattr(request.state, "staff_id", None)
+    db.info["pharmacy_id"] = getattr(request.state, "pharmacy_id", None)
     try:
         yield db
     finally:

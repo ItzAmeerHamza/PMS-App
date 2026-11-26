@@ -6,6 +6,7 @@ import { localizeError } from "../i18n/catalog";
 import { useI18n } from "../i18n/LanguageContext.jsx";
 import { formatDateTime, fullName } from "../lib/format";
 import { usePharmacy } from "../layout/PharmacyContext";
+import { Highlight, suggestionsFor } from "../lib/medicineSearch.jsx";
 
 const emptyItem = {
   medicine_id: "",
@@ -21,42 +22,6 @@ const emptyItem = {
 };
 
 const emptyPatient = { first_name: "", last_name: "", phone: "", allergies: "" };
-
-function matchScore(medicine, query) {
-  const fields = [medicine.name, medicine.salt, medicine.generic_name, medicine.manufacturer, medicine.sku, medicine.strength, medicine.form].map(
-    (value) => (value || "").toLowerCase(),
-  );
-  const starts = fields.findIndex((value) => value.startsWith(query));
-  if (starts >= 0) return starts;
-  const contains = fields.findIndex((value) => value.includes(query));
-  if (contains >= 0) return 10 + contains;
-  return 99;
-}
-
-function suggestionsFor(medicines, query) {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return [];
-  return medicines
-    .map((medicine) => ({ medicine, score: matchScore(medicine, needle) }))
-    .filter((row) => row.score < 99)
-    .sort((a, b) => a.score - b.score || a.medicine.name.localeCompare(b.medicine.name))
-    .slice(0, 8)
-    .map((row) => row.medicine);
-}
-
-function Highlight({ text, query }) {
-  const value = text || "";
-  const needle = query.trim();
-  const index = needle ? value.toLowerCase().indexOf(needle.toLowerCase()) : -1;
-  if (index < 0) return value;
-  return (
-    <>
-      {value.slice(0, index)}
-      <mark>{value.slice(index, index + needle.length)}</mark>
-      {value.slice(index + needle.length)}
-    </>
-  );
-}
 
 function MedicineSuggest({ item, medicines, onChoose, onPatch }) {
   const { t, named } = useI18n();

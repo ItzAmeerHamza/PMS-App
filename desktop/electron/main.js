@@ -31,7 +31,7 @@ ipcMain.handle("pharmacare:print", async (event) => {
   try {
     printers = await contents.getPrintersAsync();
   } catch {
-    return { ok: false, error: "The printer did not accept this prescription" };
+    return { ok: false, error: "The printer did not accept this page" };
   }
   const printer = printers.find((item) => item.isDefault) || printers[0];
   if (!printer) {
@@ -51,7 +51,7 @@ ipcMain.handle("pharmacare:print", async (event) => {
           resolve({ ok: true, printer: printer.displayName || printer.name });
           return;
         }
-        resolve({ ok: false, error: failureReason || "The printer did not accept this prescription" });
+        resolve({ ok: false, error: failureReason || "The printer did not accept this page" });
       },
     );
   });

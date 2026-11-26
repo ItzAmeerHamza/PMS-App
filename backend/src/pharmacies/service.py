@@ -1,6 +1,8 @@
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..core.audit import record_audit
+from ..core.transaction import business_transaction
 from . import schemas
 
 
@@ -13,9 +15,11 @@ def get_pharmacy(db: Session, pharmacy_id: int) -> models.Pharmacy | None:
 
 
 def create_pharmacy(db: Session, payload: schemas.PharmacyCreate) -> models.Pharmacy:
-    pharmacy = models.Pharmacy(**payload.model_dump())
-    db.add(pharmacy)
-    db.commit()
+    with business_transaction(db):
+        pharmacy = models.Pharmacy(**payload.model_dump())
+        db.add(pharmacy)
+        db.flush()
+        record_audit(db, "pharmacy.created", pharmacy_id=pharmacy.id, entity_type="pharmacy", entity_public_id=pharmacy.public_id)
     db.refresh(pharmacy)
     return pharmacy
 
@@ -24,8 +28,9 @@ def update_pharmacy(db: Session, pharmacy_id: int, payload: schemas.PharmacyUpda
     pharmacy = get_pharmacy(db, pharmacy_id)
     if not pharmacy:
         return None
-    for field, value in payload.model_dump(exclude_unset=True).items():
-        setattr(pharmacy, field, value)
-    db.commit()
+    with business_transaction(db):
+        for field, value in payload.model_dump(exclude_unset=True).items():
+            setattr(pharmacy, field, value)
+        record_audit(db, "pharmacy.updated", pharmacy_id=pharmacy.id, entity_type="pharmacy", entity_public_id=pharmacy.public_id)
     db.refresh(pharmacy)
     return pharmacy

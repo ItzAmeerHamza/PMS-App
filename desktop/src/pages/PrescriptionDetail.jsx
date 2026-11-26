@@ -77,11 +77,16 @@ export default function PrescriptionDetail() {
           <button className="btn ghost" type="button" disabled={busy} onClick={printPrescription}>
             {t("rxDetail.print")}
           </button>
+          {rx.sale_id && (
+            <Link className="btn ghost" to={`/billing/${rx.sale_id}`}>
+              {t("rxDetail.openBill")}
+            </Link>
+          )}
           {rx.status === "recorded" && (
             <>
-              <button className="btn" disabled={busy} onClick={() => run(api.dispense)}>
-                {t("rxDetail.dispense")}
-              </button>
+              <Link className="btn" to={`/billing/new?prescription=${rx.id}`}>
+                {t("rxDetail.bill")}
+              </Link>
               <button className="btn ghost" disabled={busy} onClick={() => run(api.cancel)}>
                 {t("common.cancel")}
               </button>

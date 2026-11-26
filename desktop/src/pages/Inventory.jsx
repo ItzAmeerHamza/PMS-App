@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import Dropdown from "../components/Dropdown";
 import Modal from "../components/Modal";
+import StockPanel from "../components/StockPanel";
 import { localizeError } from "../i18n/catalog";
 import { useI18n, withName } from "../i18n/LanguageContext.jsx";
 import { formatDate, money } from "../lib/format";
@@ -38,6 +39,7 @@ export default function Inventory() {
   const [form, setForm] = useState(emptyMedicine);
   const [batchForm, setBatchForm] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [stockFor, setStockFor] = useState(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState(null);
   const [importing, setImporting] = useState(false);
@@ -272,11 +274,19 @@ export default function Inventory() {
                     <span>{row.quantity_on_hand}</span>
                     {row.is_low_stock && <span className="badge low">{t("status.low")}</span>}
                   </span>
+                  {row.quantity_on_hand > row.sellable_quantity && (
+                    <div>
+                      <span className="badge danger">{t("inv.expiredUnits", { n: row.quantity_on_hand - row.sellable_quantity })}</span>
+                    </div>
+                  )}
                 </td>
                 <td>{money(row.unit_price)}</td>
                 <td className="row-actions">
                   <button className="btn ghost" onClick={() => openEdit(row)}>
                     {t("common.edit")}
+                  </button>
+                  <button className="btn ghost" onClick={() => setStockFor(row.id)}>
+                    {t("inv.stock")}
                   </button>
                   <button
                     className="btn ghost"
@@ -487,6 +497,8 @@ export default function Inventory() {
           </form>
         </Modal>
       )}
+
+      {stockFor && <StockPanel medicineId={stockFor} onClose={() => setStockFor(null)} onChanged={load} />}
 
       {batchForm && (
         <Modal title={t("inv.addStockTitle", { name: batchForm.name })} onClose={() => setBatchForm(null)}>

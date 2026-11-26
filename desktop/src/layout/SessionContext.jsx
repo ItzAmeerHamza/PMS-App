@@ -35,6 +35,13 @@ export function SessionProvider({ children }) {
     return session;
   }
 
+  async function setup(body) {
+    const session = await api.setup(body);
+    setToken(session.token);
+    setStaff(session);
+    return session;
+  }
+
   async function logout() {
     try {
       await api.logout();
@@ -45,7 +52,7 @@ export function SessionProvider({ children }) {
     setStaff(null);
   }
 
-  return <SessionContext.Provider value={{ staff, ready, login, logout }}>{children}</SessionContext.Provider>;
+  return <SessionContext.Provider value={{ staff, ready, login, setup, logout }}>{children}</SessionContext.Provider>;
 }
 
 export function useSession() {

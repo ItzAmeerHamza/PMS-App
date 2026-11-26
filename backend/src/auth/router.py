@@ -14,6 +14,21 @@ def _bearer_token(request: Request) -> str:
     return header.split(" ", 1)[1].strip()
 
 
+@router.get("/setup", response_model=schemas.SetupStatus)
+def setup_status(db: Session = Depends(get_db)):
+    return service.setup_status(db)
+
+
+@router.post("/setup", response_model=schemas.LoginOut, status_code=201)
+def first_run_setup(payload: schemas.SetupIn, db: Session = Depends(get_db)):
+    try:
+        return service.first_run_setup(db, payload)
+    except service.SetupError as exc:
+        db.rollback()
+        status = 409 if "already set up" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc))
+
+
 @router.post("/login", response_model=schemas.LoginOut)
 def login(payload: schemas.LoginIn, db: Session = Depends(get_db)):
     try:

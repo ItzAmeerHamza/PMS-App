@@ -1,10 +1,11 @@
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from .. import models
 from ..core.database import get_db
+from ..billing import service as billing_service
 from ..inventory import service as inventory_service
 from ..prescriptions import service as prescription_service
 
@@ -12,7 +13,14 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
 @router.get("/")
-def get_dashboard(pharmacy_id: int = Query(...), db: Session = Depends(get_db)):
+def get_dashboard(
+    pharmacy_id: int = Query(...),
+    day_start: datetime | None = Query(None, description="Start of the shop's local day; defaults to UTC midnight"),
+    db: Session = Depends(get_db),
+):
+    if day_start is None:
+        day_start = datetime.combine(datetime.now(timezone.utc).date(), time.min, tzinfo=timezone.utc)
+    today_sales = billing_service.sales_between(db, pharmacy_id, day_start, day_start + timedelta(days=1))
     medicines = inventory_service.list_medicines(db, pharmacy_id)
     patients = db.query(models.Patient).filter(models.Patient.pharmacy_id == pharmacy_id).count()
     prescriptions = (
@@ -35,6 +43,8 @@ def get_dashboard(pharmacy_id: int = Query(...), db: Session = Depends(get_db)):
         "expiring_count": len(expiring),
         "expired_count": len(expired),
         "units_on_hand": sum(item["quantity_on_hand"] for item in medicines),
+        "today_sales_total": today_sales["total"],
+        "today_sales_count": today_sales["count"],
         "low_stock": low_stock[:6],
         "expiring": expiring[:6],
         "recent_prescriptions": recent,

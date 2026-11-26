@@ -39,11 +39,17 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  setupStatus: () => request("/auth/setup"),
+  setup: (body) => request("/auth/setup", { method: "POST", body }),
   login: (username, password) => request("/auth/login", { method: "POST", body: { username, password } }),
   me: () => request("/auth/me"),
   logout: () => request("/auth/logout", { method: "POST" }),
   pharmacies: () => request("/pharmacies/"),
-  dashboard: (pharmacyId) => request(`/dashboard/?pharmacy_id=${pharmacyId}`),
+  dashboard: (pharmacyId, dayStart) => {
+    const params = new URLSearchParams({ pharmacy_id: pharmacyId });
+    if (dayStart) params.set("day_start", dayStart.toISOString());
+    return request(`/dashboard/?${params}`);
+  },
   medicines: (pharmacyId, { search = "", lowStock = false } = {}) => {
     const params = new URLSearchParams({ pharmacy_id: pharmacyId });
     if (search) params.set("search", search);
@@ -59,8 +65,10 @@ export const api = {
   updateMedicine: (id, body) => request(`/inventory/medicines/${id}`, { method: "PUT", body }),
   deleteMedicine: (id) => request(`/inventory/medicines/${id}`, { method: "DELETE" }),
   addBatch: (medicineId, body) => request(`/inventory/medicines/${medicineId}/batches`, { method: "POST", body }),
-  adjustBatch: (batchId, quantityDelta) =>
-    request(`/inventory/batches/${batchId}/adjust`, { method: "POST", body: { quantity_delta: quantityDelta } }),
+  medicine: (id) => request(`/inventory/medicines/${id}`),
+  movements: (medicineId) => request(`/inventory/medicines/${medicineId}/movements`),
+  adjustBatch: (batchId, quantityDelta, reason) =>
+    request(`/inventory/batches/${batchId}/adjust`, { method: "POST", body: { quantity_delta: quantityDelta, reason } }),
   patients: (pharmacyId, search = "") => {
     const params = new URLSearchParams({ pharmacy_id: pharmacyId });
     if (search) params.set("search", search);
@@ -69,14 +77,27 @@ export const api = {
   patient: (id) => request(`/patients/${id}`),
   createPatient: (body) => request("/patients/", { method: "POST", body }),
   updatePatient: (id, body) => request(`/patients/${id}`, { method: "PUT", body }),
-  prescriptions: (pharmacyId, { patientId, status } = {}) => {
+  removePatient: (id) => request(`/patients/${id}`, { method: "DELETE" }),
+  prescriptions: (pharmacyId, { patientId, status, order } = {}) => {
     const params = new URLSearchParams({ pharmacy_id: pharmacyId });
     if (patientId) params.set("patient_id", patientId);
     if (status) params.set("status", status);
+    if (order) params.set("order", order);
     return request(`/prescriptions/?${params}`);
   },
   prescription: (id) => request(`/prescriptions/${id}`),
   createPrescription: (body) => request("/prescriptions/", { method: "POST", body }),
   dispense: (id) => request(`/prescriptions/${id}/dispense`, { method: "POST" }),
   cancel: (id) => request(`/prescriptions/${id}/cancel`, { method: "POST" }),
+  sales: (pharmacyId, { start, end, search, status } = {}) => {
+    const params = new URLSearchParams({ pharmacy_id: pharmacyId });
+    if (start) params.set("start", start.toISOString());
+    if (end) params.set("end", end.toISOString());
+    if (search) params.set("search", search);
+    if (status) params.set("status", status);
+    return request(`/billing/sales?${params}`);
+  },
+  sale: (id) => request(`/billing/sales/${id}`),
+  createSale: (body) => request("/billing/sales", { method: "POST", body }),
+  voidSale: (id, reason) => request(`/billing/sales/${id}/void`, { method: "POST", body: { reason } }),
 };

@@ -89,11 +89,20 @@ def add_batch(medicine_id: int, payload: schemas.StockBatchCreate, db: Session =
     return batch
 
 
+@router.get("/medicines/{medicine_id}/movements", response_model=list[schemas.StockMovementOut])
+def list_movements(medicine_id: int, db: Session = Depends(get_db)):
+    movements = service.list_movements(db, medicine_id)
+    if movements is None:
+        raise HTTPException(status_code=404, detail="Medicine not found")
+    return movements
+
+
 @router.post("/batches/{batch_id}/adjust", response_model=schemas.StockBatchOut)
 def adjust_batch(batch_id: int, payload: schemas.StockAdjust, db: Session = Depends(get_db)):
     try:
         batch = service.adjust_batch(db, batch_id, payload)
     except ValueError as exc:
+        db.rollback()
         raise HTTPException(status_code=400, detail=str(exc))
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
