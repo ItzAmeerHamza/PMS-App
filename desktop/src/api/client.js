@@ -50,10 +50,14 @@ export const api = {
     if (dayStart) params.set("day_start", dayStart.toISOString());
     return request(`/dashboard/?${params}`);
   },
-  medicines: (pharmacyId, { search = "", lowStock = false } = {}) => {
+  medicines: (pharmacyId, { search = "", lowStock = false, page, pageSize } = {}) => {
     const params = new URLSearchParams({ pharmacy_id: pharmacyId });
     if (search) params.set("search", search);
     if (lowStock) params.set("low_stock", "true");
+    if (page) {
+      params.set("page", String(page));
+      params.set("page_size", String(pageSize || 25));
+    }
     return request(`/inventory/medicines?${params}`);
   },
   createMedicine: (body) => request("/inventory/medicines", { method: "POST", body }),
@@ -69,32 +73,44 @@ export const api = {
   movements: (medicineId) => request(`/inventory/medicines/${medicineId}/movements`),
   adjustBatch: (batchId, quantityDelta, reason) =>
     request(`/inventory/batches/${batchId}/adjust`, { method: "POST", body: { quantity_delta: quantityDelta, reason } }),
-  patients: (pharmacyId, search = "") => {
+  patients: (pharmacyId, search = "", { page, pageSize } = {}) => {
     const params = new URLSearchParams({ pharmacy_id: pharmacyId });
     if (search) params.set("search", search);
+    if (page) {
+      params.set("page", String(page));
+      params.set("page_size", String(pageSize || 25));
+    }
     return request(`/patients/?${params}`);
   },
   patient: (id) => request(`/patients/${id}`),
   createPatient: (body) => request("/patients/", { method: "POST", body }),
   updatePatient: (id, body) => request(`/patients/${id}`, { method: "PUT", body }),
   removePatient: (id) => request(`/patients/${id}`, { method: "DELETE" }),
-  prescriptions: (pharmacyId, { patientId, status, order } = {}) => {
+  prescriptions: (pharmacyId, { patientId, status, order, page, pageSize } = {}) => {
     const params = new URLSearchParams({ pharmacy_id: pharmacyId });
     if (patientId) params.set("patient_id", patientId);
     if (status) params.set("status", status);
     if (order) params.set("order", order);
+    if (page) {
+      params.set("page", String(page));
+      params.set("page_size", String(pageSize || 25));
+    }
     return request(`/prescriptions/?${params}`);
   },
   prescription: (id) => request(`/prescriptions/${id}`),
   createPrescription: (body) => request("/prescriptions/", { method: "POST", body }),
   dispense: (id) => request(`/prescriptions/${id}/dispense`, { method: "POST" }),
   cancel: (id) => request(`/prescriptions/${id}/cancel`, { method: "POST" }),
-  sales: (pharmacyId, { start, end, search, status } = {}) => {
+  sales: (pharmacyId, { start, end, search, status, page, pageSize } = {}) => {
     const params = new URLSearchParams({ pharmacy_id: pharmacyId });
     if (start) params.set("start", start.toISOString());
     if (end) params.set("end", end.toISOString());
     if (search) params.set("search", search);
     if (status) params.set("status", status);
+    if (page) {
+      params.set("page", String(page));
+      params.set("page_size", String(pageSize || 25));
+    }
     return request(`/billing/sales?${params}`);
   },
   sale: (id) => request(`/billing/sales/${id}`),

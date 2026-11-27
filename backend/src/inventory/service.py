@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from .. import models
 from ..core.audit import record_audit
+from ..core.paging import as_page, slice_page
 from ..core.outbox import emit_event
 from ..core.transaction import business_transaction
 from . import schemas
@@ -331,7 +332,15 @@ def _with_batches(db: Session):
     return db.query(models.Medicine).options(joinedload(models.Medicine.batches))
 
 
-def list_medicines(db: Session, pharmacy_id: int, search: str | None = None, low_stock: bool = False) -> list[dict]:
+def list_medicines(
+    db: Session,
+    pharmacy_id: int,
+    search: str | None = None,
+    low_stock: bool = False,
+    *,
+    page: int | None = None,
+    page_size: int = 25,
+) -> list[dict] | dict:
     query = _with_batches(db).filter(models.Medicine.pharmacy_id == pharmacy_id, models.Medicine.deleted_at.is_(None))
     if search:
         like = f"%{search}%"
@@ -343,11 +352,17 @@ def list_medicines(db: Session, pharmacy_id: int, search: str | None = None, low
             | models.Medicine.sku.ilike(like)
             | models.Medicine.barcode.ilike(like)
         )
-    medicines = query.order_by(models.Medicine.name).all()
-    serialized = [serialize_medicine(medicine) for medicine in medicines]
-    if low_stock:
-        return [item for item in serialized if item["is_low_stock"]]
-    return serialized
+    query = query.order_by(models.Medicine.name, models.Medicine.id)
+    # Low stock is decided from batch quantities, so that filter is applied after load.
+    if low_stock or page is None:
+        serialized = [serialize_medicine(medicine) for medicine in query.all()]
+        if low_stock:
+            serialized = [item for item in serialized if item["is_low_stock"]]
+        return slice_page(serialized, page, page_size)
+    total = query.order_by(None).count()
+    start = (page - 1) * page_size
+    medicines = query.offset(start).limit(page_size).all()
+    return as_page([serialize_medicine(medicine) for medicine in medicines], total, page, page_size)
 
 
 def get_medicine(db: Session, medicine_id: int) -> models.Medicine | None:

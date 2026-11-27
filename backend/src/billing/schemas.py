@@ -86,3 +86,6 @@ class SalesSummary(BaseModel):
 class SaleList(BaseModel):
     sales: list[SaleOut]
     summary: SalesSummary
+    total: Optional[int] = None
+    page: Optional[int] = None
+    page_size: Optional[int] = None

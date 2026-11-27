@@ -16,8 +16,9 @@ export default function AppLayout() {
         <div className="brand">
           <div className="brand-mark">Rx</div>
           <div>
-            <h1>PharmaCare</h1>
-            <p>{t("nav.brand")}</p>
+            <h1>{t("nav.shopName")}</h1>
+            <p>{t("nav.branch")}</p>
+            <p>{t("nav.doctor")}</p>
           </div>
         </div>
         <nav className="nav">

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import Dropdown from "../components/Dropdown";
 import Modal from "../components/Modal";
+import Pager, { PAGE_SIZE, usePage } from "../components/Pager";
 import { localizeError } from "../i18n/catalog";
 import { useI18n } from "../i18n/LanguageContext.jsx";
 import { formatDate, fullName } from "../lib/format";
@@ -24,7 +25,9 @@ export default function Patients() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
+  const [page, setPage] = usePage(search);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(emptyPatient);
@@ -32,7 +35,12 @@ export default function Patients() {
   async function load() {
     if (!pharmacy) return;
     try {
-      setRows(await api.patients(pharmacy.id, search));
+      const result = await api.patients(pharmacy.id, search, { page, pageSize: PAGE_SIZE });
+      setRows(result.items);
+      setTotal(result.total);
+      if (page > 1 && result.items.length === 0 && result.total > 0) {
+        setPage(Math.max(1, Math.ceil(result.total / PAGE_SIZE)));
+      }
     } catch (err) {
       setError(err.message);
     }
@@ -40,7 +48,7 @@ export default function Patients() {
 
   useEffect(() => {
     load();
-  }, [pharmacy, search]);
+  }, [pharmacy, search, page]);
 
   async function save(event) {
     event.preventDefault();
@@ -109,6 +117,7 @@ export default function Patients() {
           </tbody>
         </table>
         {rows.length === 0 && <p className="empty">{t("patients.empty")}</p>}
+        <Pager page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
       </section>
 
       {open && (

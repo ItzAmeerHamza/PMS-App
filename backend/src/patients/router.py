@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
+from ..core.paging import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from ..core.scope import WrongPharmacy
 from . import schemas, service
 
@@ -14,14 +15,16 @@ def _http_error(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=409, detail=str(exc))
 
 
-@router.get("/", response_model=list[schemas.PatientOut])
+@router.get("/", response_model=schemas.PatientPage | list[schemas.PatientOut])
 def list_patients(
     pharmacy_id: int = Query(...),
     search: str | None = None,
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     db: Session = Depends(get_db),
 ):
     try:
-        return service.list_patients(db, pharmacy_id, search=search)
+        return service.list_patients(db, pharmacy_id, search=search, page=page, page_size=page_size)
     except (service.PatientError, WrongPharmacy) as exc:
         raise _http_error(exc)
 

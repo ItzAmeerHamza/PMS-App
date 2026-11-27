@@ -3,19 +3,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
+from ..core.paging import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from . import schemas, service
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 
-@router.get("/medicines", response_model=list[schemas.MedicineOut])
+@router.get("/medicines", response_model=schemas.MedicinePage | list[schemas.MedicineOut])
 def list_medicines(
     pharmacy_id: int = Query(...),
     search: str | None = None,
     low_stock: bool = False,
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     db: Session = Depends(get_db),
 ):
-    return service.list_medicines(db, pharmacy_id, search=search, low_stock=low_stock)
+    return service.list_medicines(db, pharmacy_id, search=search, low_stock=low_stock, page=page, page_size=page_size)
 
 
 @router.post("/medicines/import", response_model=schemas.MedicineImportResult)

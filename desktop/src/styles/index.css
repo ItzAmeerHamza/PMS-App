@@ -68,7 +68,7 @@ a {
 .brand {
   display: flex;
   gap: 12px;
-  align-items: center;
+  align-items: flex-start;
   padding: 4px 8px 22px;
 }
 
@@ -85,7 +85,8 @@ a {
 
 .brand h1 {
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
+  line-height: 1.25;
 }
 
 .brand p {
@@ -297,6 +298,16 @@ a {
 
 .login-card h1 {
   margin: 14px 0 6px;
+}
+
+.login-card .login-meta {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.login-card .login-meta + .login-meta {
+  margin-bottom: 12px;
 }
 
 .login-card p {
@@ -577,6 +588,23 @@ label.check-row input {
 .btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 4px 2px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.pager-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .input,

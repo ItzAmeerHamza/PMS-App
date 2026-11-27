@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import Dropdown from "../components/Dropdown";
+import Pager, { PAGE_SIZE, usePage } from "../components/Pager";
 import { localizeError } from "../i18n/catalog";
 import { useI18n } from "../i18n/LanguageContext.jsx";
 import { addDays, formatDateTime, fromInputDate, money, startOfDay, toInputDate } from "../lib/format";
@@ -19,6 +20,7 @@ export default function Billing() {
   const [range, setRange] = useState(() => presetRange(1));
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
+  const [page, setPage] = usePage(`${range.from}|${range.to}|${search}|${status}`);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
@@ -28,15 +30,18 @@ export default function Billing() {
     const end = addDays(fromInputDate(range.to), 1);
     const timer = window.setTimeout(() => {
       api
-        .sales(pharmacy.id, { start, end, search: search.trim(), status })
+        .sales(pharmacy.id, { start, end, search: search.trim(), status, page, pageSize: PAGE_SIZE })
         .then((result) => {
           setData(result);
           setError("");
+          if (page > 1 && result.sales.length === 0 && result.total > 0) {
+            setPage(Math.max(1, Math.ceil(result.total / PAGE_SIZE)));
+          }
         })
         .catch((err) => setError(err.message));
     }, 200);
     return () => window.clearTimeout(timer);
-  }, [pharmacy, range, search, status]);
+  }, [pharmacy, range, search, status, page]);
 
   if (!pharmacy) return <div className="loading">{t("bill.loading")}</div>;
 
@@ -182,6 +187,7 @@ export default function Billing() {
               </tbody>
             </table>
             {data.sales.length === 0 && <p className="empty">{t("bill.empty")}</p>}
+            <Pager page={page} pageSize={PAGE_SIZE} total={data.total || 0} onPage={setPage} />
           </>
         )}
       </section>

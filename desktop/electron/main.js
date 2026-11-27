@@ -9,7 +9,7 @@ function createWindow() {
     height: 860,
     minWidth: 1080,
     minHeight: 720,
-    title: "PharmaCare",
+    title: "Shouabay Homepathic",
     backgroundColor: "#eef3f1",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

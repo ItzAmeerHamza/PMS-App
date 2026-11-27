@@ -1,6 +1,7 @@
 from collections import OrderedDict
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
+from types import SimpleNamespace
 
 from sqlalchemy.orm import Session, joinedload
 
@@ -102,15 +103,15 @@ def get_sale(db: Session, sale_id: int) -> models.Sale | None:
     return _query(db).filter(models.Sale.id == sale_id).first()
 
 
-def list_sales(
+def _filtered_sales(
     db: Session,
     pharmacy_id: int,
-    start: datetime | None = None,
-    end: datetime | None = None,
-    search: str | None = None,
-    status: str | None = None,
-) -> dict:
-    query = _query(db).filter(models.Sale.pharmacy_id == pharmacy_id)
+    start: datetime | None,
+    end: datetime | None,
+    search: str | None,
+    status: str | None,
+):
+    query = db.query(models.Sale).filter(models.Sale.pharmacy_id == pharmacy_id)
     if start:
         query = query.filter(models.Sale.created_at >= _naive_utc(start))
     if end:
@@ -124,8 +125,70 @@ def list_sales(
             | models.Sale.customer_name.ilike(like)
             | models.Sale.customer_phone.ilike(like)
         )
-    sales = query.order_by(models.Sale.created_at.desc(), models.Sale.id.desc()).all()
-    return {"sales": [serialize_sale(sale, with_items=False) for sale in sales], "summary": summarize(sales)}
+    return query
+
+
+def list_sales(
+    db: Session,
+    pharmacy_id: int,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    search: str | None = None,
+    status: str | None = None,
+    *,
+    page: int | None = None,
+    page_size: int = 25,
+) -> dict:
+    query = _filtered_sales(db, pharmacy_id, start, end, search, status)
+    if page is None:
+        sales = (
+            query.options(
+                joinedload(models.Sale.staff),
+                joinedload(models.Sale.items).joinedload(models.SaleItem.allocations),
+            )
+            .order_by(models.Sale.created_at.desc(), models.Sale.id.desc())
+            .all()
+        )
+        return {"sales": [serialize_sale(sale, with_items=False) for sale in sales], "summary": summarize(sales)}
+    # Totals cover every bill in the filter. Only the table rows are paged.
+    amounts = query.with_entities(
+        models.Sale.status,
+        models.Sale.total,
+        models.Sale.discount_amount,
+        models.Sale.tax_amount,
+        models.Sale.payment_method,
+    ).all()
+    summary = summarize(
+        [
+            SimpleNamespace(
+                status=status_value,
+                total=total,
+                discount_amount=discount,
+                tax_amount=tax,
+                payment_method=method,
+            )
+            for status_value, total, discount, tax, method in amounts
+        ]
+    )
+    total_count = query.order_by(None).count()
+    start_row = (page - 1) * page_size
+    sales = (
+        query.options(
+            joinedload(models.Sale.staff),
+            joinedload(models.Sale.items).joinedload(models.SaleItem.allocations),
+        )
+        .order_by(models.Sale.created_at.desc(), models.Sale.id.desc())
+        .offset(start_row)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "sales": [serialize_sale(sale, with_items=False) for sale in sales],
+        "summary": summary,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 def summarize(sales: list[models.Sale]) -> dict:

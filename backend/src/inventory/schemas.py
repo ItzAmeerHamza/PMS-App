@@ -143,3 +143,10 @@ class MedicineOut(BaseModel):
     nearest_expiry: Optional[date] = None
     batches: list[StockBatchOut] = []
     created_at: Optional[datetime] = None
+
+
+class MedicinePage(BaseModel):
+    items: list[MedicineOut]
+    total: int
+    page: int
+    page_size: int

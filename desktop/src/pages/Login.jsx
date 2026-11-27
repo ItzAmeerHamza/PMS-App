@@ -160,7 +160,9 @@ export default function Login() {
       <form className="login-card" onSubmit={submit}>
         <LanguageSwitcher tone="light" />
         <div className="brand-mark">Rx</div>
-        <h1>{t("auth.storeManager")}</h1>
+        <h1>{t("nav.shopName")}</h1>
+        <p className="login-meta">{t("nav.branch")}</p>
+        <p className="login-meta">{t("nav.doctor")}</p>
         <p>{t("auth.lead")}</p>
         {error && <div className="error">{error}</div>}
         <label>

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import Dropdown from "../components/Dropdown";
 import Modal from "../components/Modal";
+import Pager, { PAGE_SIZE, usePage } from "../components/Pager";
 import StockPanel from "../components/StockPanel";
 import { localizeError } from "../i18n/catalog";
 import { useI18n, withName } from "../i18n/LanguageContext.jsx";
@@ -32,8 +33,10 @@ export default function Inventory() {
   const pharmacy = usePharmacy();
   const { t, named } = useI18n();
   const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
   const [lowStock, setLowStock] = useState(false);
+  const [page, setPage] = usePage(`${search}|${lowStock}`);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyMedicine);
@@ -57,7 +60,12 @@ export default function Inventory() {
   async function load() {
     if (!pharmacy) return;
     try {
-      setRows(await api.medicines(pharmacy.id, { search, lowStock }));
+      const result = await api.medicines(pharmacy.id, { search, lowStock, page, pageSize: PAGE_SIZE });
+      setRows(result.items);
+      setTotal(result.total);
+      if (page > 1 && result.items.length === 0 && result.total > 0) {
+        setPage(Math.max(1, Math.ceil(result.total / PAGE_SIZE)));
+      }
       setError("");
     } catch (err) {
       setError(err.message);
@@ -66,7 +74,7 @@ export default function Inventory() {
 
   useEffect(() => {
     load();
-  }, [pharmacy, search, lowStock]);
+  }, [pharmacy, search, lowStock, page]);
 
   function openCreate() {
     setEditing("new");
@@ -313,6 +321,7 @@ export default function Inventory() {
           </tbody>
         </table>
         {rows.length === 0 && <p className="empty">{t("inv.empty")}</p>}
+        <Pager page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
       </section>
 
       {editing && (

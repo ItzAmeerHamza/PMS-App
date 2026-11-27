@@ -51,3 +51,10 @@ class PatientOut(BaseModel):
 
 class PatientDetailOut(PatientOut):
     pass
+
+
+class PatientPage(BaseModel):
+    items: list[PatientOut]
+    total: int
+    page: int
+    page_size: int

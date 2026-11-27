@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 from .. import models
 from ..core.audit import record_audit
 from ..core.outbox import emit_event
+from ..core.paging import as_page
 from ..core.scope import signed_in_pharmacy, visible
 from ..core.transaction import business_transaction
 from ..inventory.service import allocate_stock
@@ -120,7 +121,10 @@ def list_prescriptions(
     patient_id: int | None = None,
     status: str | None = None,
     order: str = "desc",
-) -> list[dict]:
+    *,
+    page: int | None = None,
+    page_size: int = 25,
+) -> list[dict] | dict:
     """Prescriptions of the signed-in pharmacy.
 
     order="asc" is the patient's history, oldest first; "desc" (default) is the newest-first
@@ -136,7 +140,12 @@ def list_prescriptions(
         query = query.order_by(models.Prescription.prescribed_at.asc(), models.Prescription.id.asc())
     else:
         query = query.order_by(models.Prescription.prescribed_at.desc(), models.Prescription.id.desc())
-    return [serialize_prescription(rx) for rx in query.all()]
+    if page is None:
+        return [serialize_prescription(rx) for rx in query.all()]
+    total = query.order_by(None).count()
+    start = (page - 1) * page_size
+    rows = query.offset(start).limit(page_size).all()
+    return as_page([serialize_prescription(rx) for rx in rows], total, page, page_size)
 
 
 def get_prescription(db: Session, prescription_id: int) -> models.Prescription | None:

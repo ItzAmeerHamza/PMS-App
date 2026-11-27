@@ -2,22 +2,27 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
+from ..core.paging import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from ..core.scope import WrongPharmacy
 from . import schemas, service
 
 router = APIRouter(prefix="/prescriptions", tags=["prescriptions"])
 
 
-@router.get("/", response_model=list[schemas.PrescriptionOut])
+@router.get("/", response_model=schemas.PrescriptionPage | list[schemas.PrescriptionOut])
 def list_prescriptions(
     pharmacy_id: int = Query(...),
     patient_id: int | None = None,
     status: str | None = None,
     order: str = Query("desc", pattern="^(asc|desc)$", description="asc = oldest first (patient history)"),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     db: Session = Depends(get_db),
 ):
     try:
-        return service.list_prescriptions(db, pharmacy_id, patient_id=patient_id, status=status, order=order)
+        return service.list_prescriptions(
+            db, pharmacy_id, patient_id=patient_id, status=status, order=order, page=page, page_size=page_size
+        )
     except WrongPharmacy as exc:
         raise HTTPException(status_code=403, detail=str(exc))
 

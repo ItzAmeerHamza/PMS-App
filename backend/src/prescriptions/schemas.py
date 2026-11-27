@@ -55,3 +55,10 @@ class PrescriptionOut(BaseModel):
     sale_id: Optional[int] = None
     items: list[PrescriptionItemOut] = []
     created_at: Optional[datetime] = None
+
+
+class PrescriptionPage(BaseModel):
+    items: list[PrescriptionOut]
+    total: int
+    page: int
+    page_size: int

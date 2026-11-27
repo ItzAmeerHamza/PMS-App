@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import Dropdown from "../components/Dropdown";
+import Pager, { PAGE_SIZE, usePage } from "../components/Pager";
 import { localizeError } from "../i18n/catalog";
 import { useI18n } from "../i18n/LanguageContext.jsx";
 import { formatDate } from "../lib/format";
@@ -12,16 +13,24 @@ export default function Prescriptions() {
   const { t, named } = useI18n();
   const navigate = useNavigate();
   const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
   const [status, setStatus] = useState("");
+  const [page, setPage] = usePage(status);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (!pharmacy) return;
     api
-      .prescriptions(pharmacy.id, { status: status || undefined })
-      .then(setRows)
+      .prescriptions(pharmacy.id, { status: status || undefined, page, pageSize: PAGE_SIZE })
+      .then((result) => {
+        setRows(result.items);
+        setTotal(result.total);
+        if (page > 1 && result.items.length === 0 && result.total > 0) {
+          setPage(Math.max(1, Math.ceil(result.total / PAGE_SIZE)));
+        }
+      })
       .catch((err) => setError(err.message));
-  }, [pharmacy, status]);
+  }, [pharmacy, status, page]);
 
   if (!pharmacy) return <div className="loading">{t("rx.loading")}</div>;
 
@@ -78,6 +87,7 @@ export default function Prescriptions() {
           </tbody>
         </table>
         {rows.length === 0 && <p className="empty">{t("rx.empty")}</p>}
+        <Pager page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
       </section>
     </div>
   );

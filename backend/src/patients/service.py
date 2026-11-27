@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 from .. import models
 from ..core.audit import record_audit
 from ..core.outbox import emit_event
+from ..core.paging import as_page
 from ..core.scope import WrongPharmacy, signed_in_pharmacy, visible
 from ..core.transaction import business_transaction
 from . import schemas
@@ -90,7 +91,14 @@ def _with_history(db: Session):
     return db.query(models.Patient).options(joinedload(models.Patient.prescriptions))
 
 
-def list_patients(db: Session, pharmacy_id: int, search: str | None = None) -> list[dict]:
+def list_patients(
+    db: Session,
+    pharmacy_id: int,
+    search: str | None = None,
+    *,
+    page: int | None = None,
+    page_size: int = 25,
+) -> list[dict] | dict:
     pharmacy_id = signed_in_pharmacy(db, pharmacy_id)
     query = _with_history(db).filter(
         models.Patient.pharmacy_id == pharmacy_id,
@@ -105,8 +113,13 @@ def list_patients(db: Session, pharmacy_id: int, search: str | None = None) -> l
             | models.Patient.phone.ilike(like)
             | (models.Patient.first_name + " " + models.Patient.last_name).ilike(like)
         )
-    patients = query.order_by(models.Patient.last_name, models.Patient.first_name, models.Patient.id).all()
-    return [serialize_patient(patient) for patient in patients]
+    query = query.order_by(models.Patient.last_name, models.Patient.first_name, models.Patient.id)
+    if page is None:
+        return [serialize_patient(patient) for patient in query.all()]
+    total = query.order_by(None).count()
+    start = (page - 1) * page_size
+    patients = query.offset(start).limit(page_size).all()
+    return as_page([serialize_patient(patient) for patient in patients], total, page, page_size)
 
 
 def get_patient(db: Session, patient_id: int) -> models.Patient | None:

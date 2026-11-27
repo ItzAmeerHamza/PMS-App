@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
+from ..core.paging import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from . import schemas, service
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -18,9 +19,13 @@ def list_sales(
     end: datetime | None = None,
     search: str | None = None,
     status: str | None = None,
+    page: int | None = Query(default=None, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     db: Session = Depends(get_db),
 ):
-    return service.list_sales(db, pharmacy_id, start=start, end=end, search=search, status=status)
+    return service.list_sales(
+        db, pharmacy_id, start=start, end=end, search=search, status=status, page=page, page_size=page_size
+    )
 
 
 @router.get("/sales/{sale_id}", response_model=schemas.SaleOut)
