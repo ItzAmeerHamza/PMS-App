@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
+import SyncIndicator from "../components/SyncIndicator.jsx";
 import { LanguageSwitcher, useI18n } from "../i18n/LanguageContext.jsx";
 import { PharmacyContext } from "./PharmacyContext";
 import { useSession } from "./SessionContext.jsx";
@@ -29,6 +30,7 @@ export default function AppLayout() {
           <NavLink to="/patients">{t("nav.patients")}</NavLink>
         </nav>
         <div className="sidebar-foot">
+          <SyncIndicator />
           <LanguageSwitcher />
           <strong>{managerName}</strong>
           <span>{pharmacy?.name || t("nav.pharmacy")}</span>
@@ -49,6 +51,7 @@ export default function AppLayout() {
             <NavLink to="/patients">{t("nav.patients")}</NavLink>
           </nav>
           <div className="top-nav-end">
+            <SyncIndicator tone="light" />
             <LanguageSwitcher tone="light" />
             <button className="btn ghost" type="button" onClick={logout}>
               {t("auth.signOut")}

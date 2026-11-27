@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from .. import models
 from ..core.audit import record_audit
+from ..core.outbox import emit_event
 from ..core.transaction import business_transaction
 from . import schemas
 
@@ -25,6 +26,67 @@ def _sellable_quantity(medicine: models.Medicine) -> int:
 def _utc_now_naive() -> datetime:
     """UTC with microseconds, stored without an offset (SQLite has no time zones)."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def batch_snapshot(batch: models.StockBatch) -> dict:
+    return {
+        "public_id": batch.public_id,
+        "batch_number": batch.batch_number,
+        "expiry_date": batch.expiry_date,
+        "quantity": batch.quantity,
+        "cost_price": batch.cost_price,
+        "selling_price": batch.selling_price,
+    }
+
+
+def product_snapshot(medicine: models.Medicine) -> dict:
+    """Full product snapshot. Batch quantities are read-only context; movements are the authority."""
+    return {
+        "public_id": medicine.public_id,
+        "version": medicine.version,
+        "sku": medicine.sku,
+        "name": medicine.name,
+        "salt": medicine.salt,
+        "generic_name": medicine.generic_name,
+        "manufacturer": medicine.manufacturer,
+        "form": medicine.form,
+        "strength": medicine.strength,
+        "pack_size": medicine.pack_size,
+        "category": medicine.category,
+        "barcode": medicine.barcode,
+        "rack_location": medicine.rack_location,
+        "unit_price": medicine.unit_price,
+        "reorder_level": medicine.reorder_level,
+        "requires_prescription": bool(medicine.requires_prescription),
+        "notes": medicine.notes,
+        "is_active": bool(medicine.is_active),
+        "deleted_at": medicine.deleted_at,
+        "created_at": medicine.created_at,
+        "updated_at": medicine.updated_at,
+        "batches": [batch_snapshot(batch) for batch in sorted(medicine.batches, key=lambda b: b.id)],
+    }
+
+
+def emit_product(db: Session, medicine: models.Medicine, operation: str) -> None:
+    db.flush()
+    db.refresh(medicine)
+    if operation == "deleted":
+        payload = {"public_id": medicine.public_id, "version": medicine.version, "deleted_at": medicine.deleted_at}
+    else:
+        payload = product_snapshot(medicine)
+    emit_event(db, pharmacy_id=medicine.pharmacy_id, entity_type="product", entity_id=medicine.public_id,
+               operation=operation, entity_version=medicine.version, payload=payload)
+
+
+def _source_ref(db: Session, source_type: str | None, source_id: int | None) -> str | None:
+    """A reference the cloud can understand: prescription public_id or bill invoice number."""
+    if source_id is None:
+        return None
+    if source_type == "prescription":
+        return db.query(models.Prescription.public_id).filter(models.Prescription.id == source_id).scalar()
+    if source_type == "sale":
+        return db.query(models.Sale.invoice_number).filter(models.Sale.id == source_id).scalar()
+    return None
 
 
 def change_batch_quantity(
@@ -65,6 +127,27 @@ def change_batch_quantity(
         created_at=_utc_now_naive(),
     )
     db.add(movement)
+    db.flush()
+    emit_event(
+        db,
+        pharmacy_id=movement.pharmacy_id,
+        entity_type="stock_movement",
+        entity_id=movement.public_id,
+        operation="created",
+        entity_version=1,
+        payload={
+            "public_id": movement.public_id,
+            "movement_type": movement_type,
+            "quantity_delta": delta,
+            "quantity_after": next_qty,
+            "reason": reason,
+            "source_type": source_type,
+            "source_ref": _source_ref(db, source_type, source_id),
+            "medicine_public_id": batch.medicine.public_id,
+            "batch": batch_snapshot(batch),
+            "created_at": movement.created_at,
+        },
+    )
     return movement
 
 
@@ -249,7 +332,7 @@ def _with_batches(db: Session):
 
 
 def list_medicines(db: Session, pharmacy_id: int, search: str | None = None, low_stock: bool = False) -> list[dict]:
-    query = _with_batches(db).filter(models.Medicine.pharmacy_id == pharmacy_id)
+    query = _with_batches(db).filter(models.Medicine.pharmacy_id == pharmacy_id, models.Medicine.deleted_at.is_(None))
     if search:
         like = f"%{search}%"
         query = query.filter(
@@ -277,6 +360,7 @@ def create_medicine(db: Session, payload: schemas.MedicineCreate) -> models.Medi
         medicine = models.Medicine(**data)
         db.add(medicine)
         db.flush()
+        emit_product(db, medicine, "created")
         record_audit(db, "medicine.created", pharmacy_id=medicine.pharmacy_id, entity_type="medicine", entity_public_id=medicine.public_id)
         if payload.initial_batch:
             batch = receive_new_batch(db, medicine, payload.initial_batch.model_dump())
@@ -291,6 +375,9 @@ def update_medicine(db: Session, medicine_id: int, payload: schemas.MedicineUpda
     with business_transaction(db):
         for field, value in _prepare_medicine_fields(payload.model_dump(exclude_unset=True)).items():
             setattr(medicine, field, value)
+        if not db.is_modified(medicine):
+            return medicine  # saving the same values: no version bump, no event, no audit
+        emit_product(db, medicine, "updated")
         record_audit(db, "medicine.updated", pharmacy_id=medicine.pharmacy_id, entity_type="medicine", entity_public_id=medicine.public_id)
     return get_medicine(db, medicine_id)
 
@@ -311,9 +398,14 @@ def delete_medicine(db: Session, medicine_id: int) -> bool:
     if db.query(models.StockMovement.id).filter(models.StockMovement.medicine_id == medicine_id).first():
         # The ledger is append-only; deleting the product would delete its history.
         raise ValueError("This medicine has stock history. Mark it inactive instead of deleting it.")
+    if medicine.deleted_at is not None:
+        return True
     with business_transaction(db):
+        # Tombstone (phase 06): the row stays so product.deleted can describe it.
+        medicine.deleted_at = datetime.now(timezone.utc)
+        medicine.is_active = False
+        emit_product(db, medicine, "deleted")
         record_audit(db, "medicine.deleted", pharmacy_id=medicine.pharmacy_id, entity_type="medicine", entity_public_id=medicine.public_id)
-        db.delete(medicine)
     return True
 
 
@@ -626,6 +718,7 @@ def _import_rows(db: Session, pharmacy_id: int, reader, columns: dict[str, str],
                 medicine = models.Medicine(pharmacy_id=pharmacy_id, **fields)
                 db.add(medicine)
                 db.flush()
+                emit_product(db, medicine, "created")
                 if batch:
                     receive_new_batch(db, medicine, batch, source_type="import")
                     db.flush()

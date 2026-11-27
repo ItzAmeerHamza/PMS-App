@@ -8,6 +8,10 @@ Updated at the end of phase 02 (26 November 2026). The live models are in `backe
 - `0001_baseline` brings any database to the pre-Alembic schema: it creates missing tables (older files have no sales tables), adds the columns the old startup patched in with `ALTER TABLE`, and runs the old startup `UPDATE` fixes once. The DDL is the exact SQL the old `create_all` produced.
 - `0002_identity_and_audit` adds `public_id` and `version` and creates `audit_logs`.
 - `0004_patient_tombstone` (phase 04) adds `patients.deleted_at` (indexed).
+- `0005_sync_outbox` (phase 06) creates `sync_outbox` and adds `medicines.deleted_at` (indexed). Existing rows get no events; the phase 07 bootstrap uploads them.
+- `0006_sync_state` (phase 07 Part B) adds `sync_outbox.origin` (existing rows are `live`) and `sync_state`. No device secret is stored in the database.
+
+Cloud migration `0002_owner_mfa` adds `owner_challenges` (a short-lived password-ok step before TOTP). The authenticator secret moves to `owners.totp_secret` only after a correct code.
 - `0003_stock_movements` (phase 03) creates `stock_movements`, writes an `opening_balance` movement for every non-empty batch, and adds `CHECK (quantity >= 0)` to `stock_batches`.
 - Startup (`lifespan` in `backend/src/api/main.py`) calls `run_migrations()` in `backend/src/core/migrate.py`. It runs `upgrade head`, nothing else. `create_all`, `ensure_schema`, the sample-data backfills, and `ensure_store_manager` are gone.
 - If the file already has tables and a migration is pending, `run_migrations()` first writes a backup labelled `pre-migration-<revision or legacy>`.
@@ -128,7 +132,31 @@ Patients (phase 04):
 - **Pharmacy scope:** the auth middleware puts the signed-in manager's `pharmacy_id` on the request (`request.state` → `db.info["pharmacy_id"]`). Patient list, search, read, create, update, and delete use only that pharmacy: a list or create for another `pharmacy_id` returns 403, and another pharmacy's patient id returns 404. Other modules (inventory, prescriptions, billing) still trust the `pharmacy_id` they are sent.
 - Search matches first name, last name, phone, and "first last".
 
-Medicine delete is blocked when a prescription item, sale item, or stock movement references it.
+Medicine delete is blocked when a prescription item, sale item, or stock movement references it. When allowed, it is a tombstone since phase 06: `deleted_at` is set and `is_active` cleared, the row stays, and the medicine disappears from inventory lists. Its SKU stays taken.
+
+```
+sync_outbox (phase 06, origin added in phase 07 Part B)
+  id PK, sequence UNIQUE, event_id UNIQUE (UUID), shop_id (pharmacy public_id),
+  entity_type, entity_id (entity public_id), operation, entity_version,
+  schema_version (1), payload (JSON text), created_at (UTC),
+  status, retry_count, next_attempt_at, last_error (<=255), synced_at,
+  origin ('live' or 'bootstrap', default 'live')
+  CHECK status IN ('pending','synced','retryable_error','failed')
+  CHECK operation IN ('created','updated','deleted')
+  CHECK origin IN ('live','bootstrap')
+  INDEX ix_sync_outbox_pending (status, next_attempt_at, sequence)
+  INDEX ix_sync_outbox_entity_id (entity_id)
+  INDEX ix_sync_outbox_origin (origin, status, sequence)
+
+sync_state (phase 07 Part B) — one row per pharmacy, no device secret
+  pharmacy_id PK FK, bootstrap_status, bootstrap_stage, bootstrap_cursor,
+  last_success_at, last_acknowledged_sequence, last_error (<=255), last_error_at,
+  backoff_until, backoff_attempt, activated_at, cloud_api_url
+  CHECK bootstrap_status IN ('not_started','running','complete')
+  CHECK bootstrap_stage IN ('products','movements','patients','prescriptions','done')
+```
+
+Every product, stock movement, patient, and prescription write emits its event in the same `business_transaction` (`backend/src/core/outbox.py`). Event list, payloads, and the worker read model: `docs/SYNC_PROTOCOL.md`, "Implementation notes (phase 06)".
 
 ```
 audit_logs (phase 02)
@@ -176,7 +204,8 @@ Keep every current table. Add the following. Names in the phase prompts (`Shop`,
 | PrescriptionItem | `prescription_items` | **Done (phase 02):** `public_id`. Items travel inside the prescription event. |
 | AuditLog | `audit_logs` | **Done (phase 02).** |
 | — | `sales`, `sale_items`, `sale_allocations` | Keep. Stock movements must record sale, void, and dispense. |
-| sync_outbox | new, phase 06 | See `SYNC_PROTOCOL.md`. Not created before that phase. |
+| sync_outbox | `sync_outbox` | **Done (phase 06, origin in 07 Part B).** See above and `SYNC_PROTOCOL.md`. |
+| — | `sync_state` | **Done (phase 07 Part B).** Bootstrap cursor and last sync outcome. The device secret is a file, not a column. |
 
 `public_id` is the sync identity. Local integer primary keys stay so existing foreign keys and the React client do not have to be rewritten in one step. New rows get a UUID at insert. Existing rows get a UUID once, in a migration, and that value never changes.
 
@@ -222,22 +251,35 @@ Rules:
 - Do not call `create_all`. Alembic owns the schema; `create_all` is no longer called anywhere in the live app.
 - Do not delete `backend/data/pharmacy.db` on startup. Migrations must be additive and reversible where SQLite allows it.
 
-## Cloud tables (later, PostgreSQL)
+## Cloud tables (PostgreSQL, `cloud-api/`, phase 07 Part A)
+
+Implemented in `cloud-api/app/models/__init__.py`, migration `cloud-api/alembic/versions/0001_initial.py`. Tested on local PostgreSQL 14.19 (`pharmacare_cloud_test`); `compare_metadata` against the models is empty.
 
 Every business row is stored per shop. Uniqueness is `(shop_id, public_id)`, not `public_id` alone and not the shop's integer id.
 
 ```
-shops
-shop_devices
-products                  (shop_id, public_id) unique
-stock_movements           (shop_id, public_id) unique
-patients                  (shop_id, public_id) unique
-prescriptions             (shop_id, public_id) unique
-prescription_items        (shop_id, public_id) unique
-audit_logs
-processed_sync_events     (shop_id, event_id) unique
-synchronization_state     one row per shop
+shops                     id UUID PK = the desktop pharmacy public_id; name; disabled_at
+shop_devices              id UUID PK; shop_id FK; secret_hash (SHA-256, unique); revoked_at; last_seen_at
+owners                    email unique; password_hash (Argon2id); totp_secret (phase 08)      [added]
+owner_sessions            token_hash PK (SHA-256); owner_id FK; expires_at                    [added]
+products                  (shop_id, public_id) unique; version; catalog fields; deleted_at
+stock_batches             (shop_id, public_id) unique; product_id FK; quantity               [added]
+stock_movements           (shop_id, public_id) unique; product_id, batch_id FK;
+                          quantity_after (shop) and cloud_quantity_after (here)
+patients                  (shop_id, public_id) unique; version; deleted_at
+prescriptions             (shop_id, public_id) unique; version; patient_id FK; status
+prescription_items        (shop_id, public_id) unique; prescription_id, product_id FK
+audit_logs                cloud-side owner/device/shop actions; ids only
+processed_sync_events     (shop_id, event_id) unique; sequence; entity; version; device_id
+synchronization_state     one row per shop (PK shop_id); last_sync_at; last_applied_sequence;
+                          events_applied; last_result; last_error_code; reported_pending/failed/at
 ```
+
+Three tables were added beyond the original list. `stock_batches` holds per-batch quantity and expiry, so the owner can see stock and expiry; it changes only through movements. `owners` and `owner_sessions` exist so admin routes can be protected in Part A.
+
+Business rows reference each other through cloud integer keys that the apply code always looks up with the same `shop_id` (`app/sync/apply.py`), so a shop A `public_id` can never attach to a shop B row. The database does not add a composite `(shop_id, id)` foreign key; that would be a further hardening step.
+
+`stock_movements.quantity_after` is what the shop reported; `cloud_quantity_after` is the batch quantity in the cloud after applying. They differ only if movements are missing (for example before the initial bootstrap), which makes such gaps visible for reconciliation.
 
 `processed_sync_events` is the idempotency table. A retried event id inserts nothing the second time.
 

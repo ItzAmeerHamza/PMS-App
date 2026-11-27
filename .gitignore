@@ -10,3 +10,4 @@ backend/data/backups/
 backend/data/*.db-wal
 backend/data/*.db-shm
 backend/data/*.before-restore-*
+backend/data/secrets/

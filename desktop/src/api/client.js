@@ -100,4 +100,9 @@ export const api = {
   sale: (id) => request(`/billing/sales/${id}`),
   createSale: (body) => request("/billing/sales", { method: "POST", body }),
   voidSale: (id, reason) => request(`/billing/sales/${id}/void`, { method: "POST", body: { reason } }),
+  syncStatus: () => request("/sync/status"),
+  syncDiagnostics: () => request("/sync/diagnostics"),
+  activateSync: (deviceToken, cloudApiUrl) =>
+    request("/sync/activate", { method: "POST", body: { device_token: deviceToken, cloud_api_url: cloudApiUrl || null } }),
+  syncNow: () => request("/sync/run", { method: "POST" }),
 };

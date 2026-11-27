@@ -18,6 +18,8 @@ from ..inventory.router import router as inventory_router
 from ..patients.router import router as patient_router
 from ..pharmacies.router import router as pharmacy_router
 from ..prescriptions.router import router as prescription_router
+from ..sync.router import router as sync_router
+from ..sync.worker import autostart_enabled, get_worker
 
 log = logging.getLogger("pharmacare")
 
@@ -55,7 +57,14 @@ async def lifespan(_app: FastAPI):
             seed_if_empty(db)
         finally:
             db.close()
-    yield
+    worker = get_worker() if autostart_enabled() else None
+    if worker is not None:
+        worker.start()
+    try:
+        yield
+    finally:
+        if worker is not None:
+            worker.stop()
 
 
 app = FastAPI(
@@ -120,6 +129,7 @@ app.include_router(patient_router, prefix="/api/v1")
 app.include_router(prescription_router, prefix="/api/v1")
 app.include_router(dashboard_router, prefix="/api/v1")
 app.include_router(billing_router, prefix="/api/v1")
+app.include_router(sync_router, prefix="/api/v1")
 
 
 @app.get("/")

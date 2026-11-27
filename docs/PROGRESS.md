@@ -1,8 +1,8 @@
 # Current development status
 
-Last updated: 26 November 2026, at the end of phase 05 (prescriptions).
+Last updated: 26 November 2026, at the end of phase 07 Part B (local sync worker).
 
-**Where the project stands:** the offline shop app is feature-complete for local inventory, patients, prescriptions, and billing. It runs with no internet and no cloud settings (tested with the network blocked). **Sync has not started**: there is no `sync_outbox`, cloud API, sync worker, owner dashboard, or Windows installer yet. Those are phases 06–09.
+**Where the project stands:** the offline shop app is feature-complete for local inventory, patients, prescriptions, and billing, and runs with no internet. Since phase 06 every product, stock, patient, and prescription change also writes a durable sync event in the same transaction (`sync_outbox`). The cloud side exists as `cloud-api/` (FastAPI + PostgreSQL ingest and owner read API), tested locally and **not deployed**. The shop PC can now upload that outbox: a background worker in the local API, device-code activation, a one-time bootstrap of older rows, and a sync indicator in the desktop shell (phase 07 Part B). There is still no owner dashboard (08) or Windows installer (09). Nothing is sent until a manager enters a device code.
 
 This is the status file. At the end of every phase, replace the relevant section with what was actually completed, the tests that were run, and what could not be verified. Do not mark work complete without evidence.
 
@@ -32,9 +32,9 @@ Stop when the phase file says stop.
 | 3 | `phases/03-inventory-management.md` | Products, batches, stock movements | **done** (26 Nov 2026) |
 | 4 | `phases/04-patient-management.md` | Patients and repeat visits | **done** (26 Nov 2026) |
 | 5 | `phases/05-prescriptions.md` | Prescriptions, history, local test suite | **done** (26 Nov 2026) |
-| 6 | `phases/06-sync-outbox.md` | Transactional outbox. No HTTP yet | not started |
-| 7 | `phases/07-cloud-backend.md` Part A | Railway FastAPI + PostgreSQL ingest | not started |
-| 8 | `phases/07-cloud-backend.md` Part B | Local sync worker, bootstrap, desktop indicator | not started |
+| 6 | `phases/06-sync-outbox.md` | Transactional outbox. No HTTP yet | **done** (26 Nov 2026) |
+| 7 | `phases/07-cloud-backend.md` Part A | Railway FastAPI + PostgreSQL ingest | **done** (26 Nov 2026), not deployed |
+| 8 | `phases/07-cloud-backend.md` Part B | Local sync worker, bootstrap, desktop indicator | **done** (26 Nov 2026) |
 | 9 | `phases/08-admin-dashboard.md` | Next.js owner dashboard | not started |
 | 10 | `phases/09-testing-and-deployment.md` Part A | Windows installer | not started |
 | 11 | `phases/09-testing-and-deployment.md` Part B | Final security and readiness review | not started |
@@ -134,6 +134,101 @@ Evidence, 26 November 2026:
 
 Not verified: Windows; Electron with its real preload; patient editing in the UI (no screen yet, out of scope).
 
+## Phase 07 Part A — what was done
+
+Baseline: commit `7df91d5` plus the uncommitted phase 06 work.
+
+Code (all new, in `cloud-api/`):
+
+- `app/config/` (settings from env; `DATABASE_URL` normalized to psycopg 3; repr hides the URL), `app/models/` (13 tables, engine/session).
+- `app/auth/tokens.py`, `deps.py`: device tokens `pcd_<id>.<secret>` stored as SHA-256; owner passwords Argon2id; owner session tokens stored as SHA-256; `require_device`, `require_owner` (device tokens → 403, anonymous → 401).
+- `app/sync/schemas.py` (schema v1 validation with field-only error codes), `apply.py` (product, movement, patient, prescription rules), `service.py` (per-event transaction, per-shop row lock, idempotency, batch stop rule, last-known outbox counts).
+- `app/services/accounts.py` (owners, shops, devices, cloud audit rows), `admin_reads.py` (paginated, shop-filtered reads).
+- `app/api/sync.py` (`POST /api/v1/sync/push`), `app/api/admin.py` (`/api/v1/owner/login|logout`, `POST /api/v1/admin/shops`, `POST /api/v1/admin/shops/{id}/devices`, `POST /api/v1/admin/devices/{id}/revoke`, and the six `GET /api/v1/admin/*` routes), `app/main.py` (health, query-string-free access log, INFO app log), `app/cli.py` (`create-owner`).
+- `alembic/` with `0001_initial`; `requirements.txt`, `requirements-dev.txt`, `pytest.ini`.
+- Tests: `tests/conftest.py`, `tests/test_sync.py` (14), `tests/test_auth_and_admin.py` (10); `tests/fixtures/desktop_events.json` (22 synthetic events exported from the real desktop outbox by `tests/make_desktop_fixture.py`).
+- The desktop `backend/` code is unchanged in this part.
+
+Environment changes on the development Mac (approved by the user): new virtualenv `cloud-api/.venv` (fastapi 0.165.0, sqlalchemy 2.1.9, alembic, psycopg 3.3.9, argon2-cffi, pydantic-settings, pytest, httpx2); two new empty databases on the local PostgreSQL 14.19, `pharmacare_cloud_test` and `pharmacare_cloud_dev`. Existing databases (`postgres`, `job-preply-db`) untouched. The dev database now holds a synthetic owner `dev-owner@example.test` and the fixture shop.
+
+Docs: new `docs/RAILWAY_DEPLOYMENT.md`; `docs/SYNC_PROTOCOL.md` (cloud implementation notes, results and codes, which events in a mixed batch are acknowledged), `docs/DATABASE.md` (cloud tables as built), `docs/DECISIONS.md` (28–31), `docs/ARCHITECTURE.md`, `docs/LOCAL_DEVELOPMENT.md`.
+
+Evidence, 26 November 2026:
+
+- `cd cloud-api && .venv/bin/pytest` → **24 passed**, 0 failed, 0 skipped, against real PostgreSQL 14.19 (`pharmacare_cloud_test`).
+- `cd backend && .venv/bin/pytest` → **78 passed** (unchanged). The backend virtualenv cannot import `cloud-api`, and the local API starts with no cloud variables set.
+- Phase test list: valid product, movement, patient, and prescription events apply; the 22 real desktop events apply and match the desktop's batch quantities, and a full replay returns 22 × `already_processed` with quantities unchanged; a duplicate `event_id` (sequentially, within one batch, and under a new event id) never changes stock twice; stale and skipped versions are `ordering_conflict`; a prescription with a missing patient or product and a movement with a missing product are not applied; a fault injected after the prescription row is flushed leaves no prescription, item, or processed row, and the same event applies once the fault is gone; unknown, malformed, wrong-secret, and revoked device tokens get 401; shop A's device cannot write shop B (`shop_id_mismatch`, B's row unchanged) and the same accidental `public_id` in both shops stays two rows; admin routes return 401 without a token or with a made-up owner token, 403 with any device token, 200 with an owner token; two threads pushing the same event at once give one `applied` and one `already_processed`, stock applied once.
+- Also: batch rule (invalid events do not block; the first conflict blocks the rest), out-of-order batches applied by `sequence`, payload/envelope mismatches rejected, 413 above 500 events, reported outbox counts stored, owner login/logout and Argon2id hash, `create-owner` command, pagination and shop filter, no secrets or database URL in responses, no patient details in server logs, migrations equal the models.
+- Mutation checks (reverted): without the processed-event check, 3 tests failed (desktop replay, duplicate stock, concurrency); without the shop-id check, the isolation test failed.
+- Manual run (real `uvicorn` on `pharmacare_cloud_dev`): health 200; owner created with the CLI and signed in; shop registered and device issued; 22 fixture events `applied` over HTTP, replay 22 `already_processed`; admin inventory with the device token 403; owner reads showed FX-PARA 45 and FX-AMOX 20 (matching the desktop), 3 prescriptions, sync-status 22 events applied. The server log had one summary line per push and no patient data, passwords, or tokens (found and fixed during this run: the app's INFO logs were not shown under uvicorn).
+
+Not verified:
+
+- Railway: nothing was deployed (needs the owner's account, go-ahead, and a pricing/terms check).
+- More than one API replica or process (concurrency tested with threads in one process).
+- Rate limiting, TOTP, cookie sessions, CSRF (not built; phase 08 and pre-launch list in `docs/RAILWAY_DEPLOYMENT.md`).
+- Pushing the developer database's real outbox: its 3 pending events refer to products and patients that predate the outbox. Part B's bootstrap is what uploads those older rows, after a device code is entered. It was not run against this file.
+
+## Phase 07 Part B — what was done
+
+Baseline: the uncommitted phase 06 and phase 07 Part A work. Not committed in this phase either.
+
+Code:
+
+- `backend/migrations/versions/0006_sync_state.py`: `sync_outbox.origin` (`live` or `bootstrap`) and `sync_state` (activation time, bootstrap cursor, last success, last acknowledged sequence, last error, backoff). The device secret is not a column.
+- `backend/src/sync/`: `secrets.py` (DPAPI on Windows, mode-0600 file elsewhere, under the data directory's `secrets/`, git-ignored), `transport.py` (stdlib HTTPS push, timeout, `Retry-After`), `bootstrap.py` (resumable snapshot of pre-outbox rows, dependency order, stable event ids), `worker.py` (one thread, no overlap, 5 minutes, batches of 100, jittered backoff), `service.py` and `router.py` (`GET /sync/status`, `GET /sync/diagnostics`, `POST /sync/activate`, `POST /sync/run`).
+- `backend/src/api/main.py` starts the worker after migrations unless `PHARMACARE_SYNC_AUTOSTART=0`. With no device code and no cloud URL the API still serves the shop.
+- `backend/src/core/outbox.py`: `list_ready_prefix` does not send an event while an earlier unsynced event of the same origin is not due yet. `invalid_event` is marked failed and drops out of that queue.
+- Desktop: `SyncIndicator` in the shell (Synced, Syncing, Waiting for internet, Sync error, and Not activated before a device code), and `pages/Sync.jsx` for the shop id, activation, and a diagnostic list of event ids and error codes. Strings in English, Urdu, and Roman Urdu. The device code is not shown again after it is saved.
+- Tests: `backend/tests/test_sync_worker.py` (21, fake cloud) and `cloud-api/tests/test_worker_integration.py` (3, real PostgreSQL).
+
+Docs: `docs/SYNC_PROTOCOL.md`, `docs/DATABASE.md`, `docs/DECISIONS.md` (32–34), `docs/ARCHITECTURE.md`, `docs/LOCAL_DEVELOPMENT.md`, `docs/RAILWAY_DEPLOYMENT.md`.
+
+Evidence, 26 November 2026:
+
+- `cd backend && .venv/bin/pytest` → **99 passed**, 0 failed.
+- `cd cloud-api && .venv/bin/pytest` → **27 passed**, 0 failed, 0 skipped, against PostgreSQL 14 (`pharmacare_cloud_test`). The 3 new tests drive the desktop worker through the cloud API.
+- Phase test list: events created while the cloud is unreachable upload once it answers; a dropped response is retried as `already_processed` and stock is applied once (quantity stayed 7); a new worker object sends rows that were still pending; 3000 live events drained in sequence order in batches of at most 100; a prescription is applied only after its patient, and a prescription sequenced ahead of its patient stays pending along with the blocked patient; bootstrap stopped after the first patient and resumed to 3 distinct patients, and a second pass did not add rows; HTTP 503 left the event pending and a later success marked it synced; an invalid event was not sent again and the later product was applied; two shops with the same patient `public_id` became two cloud rows, and each shop's batch quantity stayed its own.
+- Also: the shop answers `/health` and creates a patient with the worker running and outgoing sockets blocked; a bad device code is rejected and the token is absent from the database, the status JSON, and the diagnostics JSON; a not-yet-due event holds the later one; bootstrap batches are uploaded before live events; a pre-existing patient that was edited later is sent as version 1 then version 2; two overlapping `run_once` calls, one is skipped; file mode 0600 and directory mode 0700 on macOS.
+- Desktop, against a temporary data directory (not `backend/data/pharmacy.db`): setup, the indicator read "Not activated", a bad code showed the localized error, a device code was saved and not shown again, an empty shop's first upload finished, adding a patient while the cloud was down left "Waiting to send: 1" and then "Waiting for internet" with last error `offline`, and the sync page did not show the patient name or phone. The dashboard still loaded. Urdu showed "انٹرنیٹ کا انتظار".
+- Developer database: migrated `0005_sync_outbox` → `0006_sync_state` with backup `backend/data/backups/pharmacy-20261126T173648754491Z-pre-migration-0005_sync_outbox.db`. Row counts unchanged (pharmacies 1, medicines 15, stock_batches 16, stock_movements 18, patients 8, prescriptions 9, prescription_items 11, sales 4, sync_outbox 3). The 3 outbox rows stayed `origin=live`. No `sync_state` row and no device code (activation was not run on this file). Integrity ok. Foreign-key check empty.
+
+Not verified:
+
+- Windows DPAPI. The branch is implemented with `CryptProtectData` / `CryptUnprotectData` and was not run.
+- A packaged Electron build, or Electron's real preload. The UI check used Vite in a browser.
+- Railway. The worker was pointed at the local cloud test API and at a closed port, not at a deployed host.
+- The developer database's 3 pending events were not uploaded. They still need a device code; bootstrap will send the older products and patients before them.
+
+## Phase 06 — what was done
+
+Baseline: commit `7df91d5` (phases 02–05, committed by the developer before this phase).
+
+Code (files changed):
+
+- `backend/src/models.py`, `backend/migrations/versions/0005_sync_outbox.py`: `SyncOutbox` (columns as in `SYNC_PROTOCOL.md`, unique `event_id` and `sequence`, status and operation checks, pending index) and `medicines.deleted_at`.
+- New `backend/src/core/outbox.py`: `emit_event()` (same-transaction insert, per-transaction duplicate guard, `shop_id` = pharmacy `public_id`, JSON payload with `event` name) and the worker read model `list_pending`, `counts`, `acknowledge`, `record_error`, `retry_delay`, `purge_synced`, `serialize_event`.
+- `backend/src/core/transaction.py`: clears the per-transaction outbox state when the outermost block ends. `backend/src/core/config.py`: `outbox_retention_days` (30).
+- `backend/src/inventory/service.py`: `product_snapshot`, `emit_product`; product created/updated/deleted events; medicine delete is now a tombstone; deleted medicines hidden from lists; `change_batch_quantity` emits `stock.movement_created` (covers receipts, imports, adjustments, sales, voids, dispenses); edits that change nothing are skipped.
+- `backend/src/patients/service.py`: `patient_snapshot`, `emit_patient`; created/updated/deleted events; unchanged saves skipped.
+- `backend/src/prescriptions/service.py`: `prescription_snapshot` (items and patient `public_id`), `emit_prescription`; created on create, updated on cancel and dispense.
+- `backend/src/billing/service.py`: invoice number assigned when the sale row is created (so movement events can reference it); `prescription.updated` when a bill dispenses a prescription or a void returns it to recorded.
+- `backend/src/seed.py`: demo seed runs with the outbox disabled.
+- Tests: new `backend/tests/test_outbox.py` (20).
+- Docs: `docs/SYNC_PROTOCOL.md` (status, implementation notes and differences), `docs/DATABASE.md`, `docs/DECISIONS.md` (25–27), `docs/ARCHITECTURE.md`.
+- No frontend change. Deleting a medicine in Inventory now hides it instead of removing the row; the screen behaves the same.
+
+Evidence, 26 November 2026:
+
+- `cd backend && .venv/bin/pytest` → **78 passed**, 0 failed (58 earlier + 20 outbox).
+- Phase test list: product create commits the medicine and exactly one event; a failure forced after the business and outbox inserts leaves neither (through the API and directly); two patient updates give versions 2 and 3 in sequence order; pending order is the same in two sessions and after an API restart; the prescription snapshot has its items and the patient `public_id`; an adjustment payload has the delta, batch `public_id`, and medicine `public_id`; reloading screens and re-saving unchanged values create no event and no version bump; a second prescription leaves the first and its events untouched and gets the only new `prescription.created`.
+- Also: receipt is one movement event (no product update); sale and void each emit one movement plus one `prescription.updated`, and no invoice event; dispense and cancel emit updates; a failed dispense emits nothing; patient and medicine deletes are tombstones whose payload carries no patient details, and repeating them adds nothing; CSV import emits product and movement events; payloads never change after insert; the demo seed emits nothing; nested calls cannot double an event; the worker read model acknowledges only `applied`/`already_processed`, backs off 30 s then 60 s, fails non-retryable errors, keeps synced rows until purged, and never purges unsynced rows.
+- Mutation checks (reverted): events written in a separate session → the rollback and count tests failed; duplicate guard removed → `test_nested_calls_cannot_emit_the_same_event_twice` failed; unchanged-save check removed → `test_reloading_and_saving_unchanged_values_create_no_event` failed.
+- Review step 2: no reference to Railway, `CLOUD_API_URL`, or an HTTP client (`httpx`, `requests`, `urllib.request`, `aiohttp`) in `backend/src`, `desktop/src`, or `desktop/electron`; `tests/test_outbox.py::test_no_cloud_url_or_http_client_in_backend_code` enforces it for the backend.
+- Developer database: copy migrated first, then `backend/data/pharmacy.db` (`0004` → `0005`), backup `backend/data/backups/pharmacy-20261126T131959585964Z-pre-migration-0004_patient_tombstone.db`; rows unchanged; integrity ok; 0 foreign-key violations; 0 outbox rows after migration (pre-existing data, by design). Then, against the real API on that file: a synthetic patient "Outbox Testpatient", a prescription for her, and a stock adjustment wrote 3 pending events (patient, prescription, stock_movement). After stopping and starting the API, the 3 rows were identical and still pending (done-when condition).
+
+Not verified: Windows; concurrent writers (one process today); the Inventory delete button against the tombstone in the UI (API-tested only).
+
 ## Phase 05 — what was done
 
 Code (files changed):
@@ -172,7 +267,7 @@ cd backend
 .venv/bin/pytest
 ```
 
-Result at the end of phase 02 (26 November 2026, macOS, Python 3.14.6, pytest 9.2.0, alembic 1.20.1, argon2-cffi 25.1.0): **27 passed**, 0 failed, 0 skipped. At the end of phase 03: **42 passed**. At the end of phase 04: **49 passed**. At the end of phase 05: **58 passed** (see the phase sections above).
+Result at the end of phase 02 (26 November 2026, macOS, Python 3.14.6, pytest 9.2.0, alembic 1.20.1, argon2-cffi 25.1.0): **27 passed**, 0 failed, 0 skipped. At the end of phase 03: **42 passed**. At the end of phase 04: **49 passed**. At the end of phase 05: **58 passed**. At the end of phase 06: **78 passed**. At the end of phase 07 Part A: backend **78 passed**; cloud-api **24 passed** on PostgreSQL. At the end of phase 07 Part B: backend **99 passed**; cloud-api **27 passed** (see the phase sections above).
 
 | File | Proves |
 | --- | --- |
@@ -211,6 +306,7 @@ Verified by reading the code, by the phase 02 test suite, and by running the API
 - Patients: create, search by name, phone, or full name, repeat-visitor badge, visit count and last visit, removal as a tombstone that keeps history, scoped to the signed-in pharmacy. Editing exists in the API only.
 - Prescriptions: create with line items (copied medicine details), patient history oldest first, list newest first, cancel, scoped to the signed-in pharmacy. The UI dispenses by billing the prescription; the older dispense endpoint writes `dispense` movements.
 - Billing: sales, invoice numbers, discounts and tax, payment methods, cash change, voids that restore the allocated batches, today's sales on the dashboard.
+- Sync: a background worker in the local API uploads pending outbox rows when a device code is stored (`CLOUD_API_URL` or the address saved at activation). Pre-existing rows are snapshotted once, in dependency order, and can resume. The shell shows Synced, Syncing, Waiting for internet, Sync error, or Not activated. The counter does not wait on the cloud.
 - Shop scoping columns exist (`pharmacy_id`) on the main business tables, but most routes trust the `pharmacy_id` they are sent.
 - Electron preload uses context isolation and points the UI at the local API.
 
@@ -231,9 +327,6 @@ Verified by reading the code, by the phase 02 test suite, and by running the API
 - Scheduled backups and copying backups off the PC.
 - A screen to change the manager password (only first-run setup exists).
 - Desktop (React) automated tests.
-- `sync_outbox` and transactional event writes.
-- Cloud API, PostgreSQL, shop device credentials.
-- Background sync worker and desktop sync indicator.
 - Owner dashboard, TOTP, and owner sessions.
 - PharmaCare Windows installer. The root electron-builder config belongs to the unused store system.
 - Electron does not launch or supervise FastAPI.
@@ -242,7 +335,8 @@ Verified by reading the code, by the phase 02 test suite, and by running the API
 
 ## Known hazards
 
-- **Uncommitted work.** Billing, phases 02–05, `docs/`, and `phases/` are not committed. The last commit is `67c7275`. Snapshots of the tree from before phases 02–05 are in the session scratch folder only, which is temporary. Commit before phase 06.
+- **Uncommitted work.** Phases 06, 07 Part A, and 07 Part B are not committed. The last commit is `7df91d5` (phases 02–05).
+- **Cloud not production-ready.** No rate limiting, owner TOTP, cookie sessions, or CSRF yet; bearer owner tokens are a Part A stopgap. Do not deploy with real patient data before phase 08 and the pre-launch list in `docs/RAILWAY_DEPLOYMENT.md`.
 - **Developer database migrated.** On 26 November 2026, at the user's request, `backend/data/pharmacy.db` was migrated from the pre-Alembic schema to `0002_identity_and_audit` with `run_migrations()`. Backup written: `backend/data/backups/pharmacy-20261126T101419430233Z-pre-migration-legacy.db`. Row counts unchanged (pharmacies 1, staff 1, medicines 8, stock_batches 8, patients 4, prescriptions 3, prescription_items 4); `public_id` present and unique on all 6 tables; integrity ok; WAL; 0 foreign-key violations. `alembic current` reports `0002_identity_and_audit (head)` and a second `alembic upgrade head` is a no-op. Its existing password keeps working and becomes Argon2id on the next sign-in. Backups and WAL files are git-ignored.
 - **Backups are not encrypted.** `CLAUDE.md` requires encrypted SQLite backups with a tested restore. Phase 02 backups (`backend/src/core/backup.py`) are plain SQLite copies containing patient data. No phase file owns encryption yet. Decide where it lands (phase 03 supporting change, or phase 09 with Windows credential storage for the key) before real shop data exists.
 - Resolved in phase 03: expired batches are marked "Expired" on the dashboard and in the Stock panel, and Inventory shows "N expired" beside Qty. Qty itself still includes expired units (by design: it is what is physically on the shelf); billing refuses them.
@@ -260,4 +354,4 @@ Verified by reading the code, by the phase 02 test suite, and by running the API
 
 ## Next step
 
-Execute `phases/06-sync-outbox.md`. Commit the current working tree first. Phase 06 is the first sync phase; the offline app should be committed as a known-good baseline before it starts.
+Part B is done. Next file, only in a later session: `phases/08-admin-dashboard.md` (the owner dashboard). Do not start it until the user asks. The cloud API is still not deployed.

@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from .. import models
 from ..core.audit import record_audit
+from ..core.outbox import emit_event
 from ..core.scope import signed_in_pharmacy, visible
 from ..core.transaction import business_transaction
 from ..inventory.service import allocate_stock
@@ -31,6 +32,47 @@ def _item_snapshot(item: models.PrescriptionItem) -> dict:
         "medicine_salt": item.medicine_salt or salt,
         "medicine_company": item.medicine_company or company,
     }
+
+
+def prescription_snapshot(prescription: models.Prescription) -> dict:
+    """Full prescription snapshot for sync, items included (items have no events of their own)."""
+    return {
+        "public_id": prescription.public_id,
+        "version": prescription.version,
+        "patient_public_id": prescription.patient.public_id,
+        "doctor_name": prescription.doctor_name,
+        "complaint": prescription.complaint,
+        "diagnosis": prescription.diagnosis,
+        "notes": prescription.notes,
+        "status": prescription.status,
+        "prescribed_at": prescription.prescribed_at,
+        "dispensed_at": prescription.dispensed_at,
+        "created_at": prescription.created_at,
+        "items": [
+            {
+                "public_id": item.public_id,
+                "medicine_public_id": item.medicine.public_id if item.medicine else None,
+                "medicine_name": item.medicine_name,
+                "medicine_salt": item.medicine_salt,
+                "medicine_company": item.medicine_company,
+                "dosage": item.dosage,
+                "frequency": item.frequency,
+                "duration_days": item.duration_days,
+                "quantity": item.quantity,
+                "instructions": item.instructions,
+            }
+            for item in sorted(prescription.items, key=lambda i: i.id)
+        ],
+    }
+
+
+def emit_prescription(db: Session, prescription: models.Prescription, operation: str) -> None:
+    """Write prescription.created / prescription.updated for the current version."""
+    db.flush()
+    db.refresh(prescription)
+    db.expire(prescription, ["items"])
+    emit_event(db, pharmacy_id=prescription.pharmacy_id, entity_type="prescription", entity_id=prescription.public_id,
+               operation=operation, entity_version=prescription.version, payload=prescription_snapshot(prescription))
 
 
 def serialize_prescription(prescription: models.Prescription) -> dict:
@@ -142,6 +184,7 @@ def create_prescription(db: Session, payload: schemas.PrescriptionCreate) -> mod
                     medicine_company=medicine.manufacturer,
                 )
             )
+        emit_prescription(db, prescription, "created")
         record_audit(db, "prescription.created", pharmacy_id=prescription.pharmacy_id, entity_type="prescription", entity_public_id=prescription.public_id)
     return get_prescription(db, prescription.id)
 
@@ -154,6 +197,7 @@ def cancel_prescription(db: Session, prescription_id: int) -> models.Prescriptio
         raise ValueError("Cannot cancel a dispensed prescription")
     with business_transaction(db):
         prescription.status = "cancelled"
+        emit_prescription(db, prescription, "updated")
         record_audit(db, "prescription.cancelled", pharmacy_id=prescription.pharmacy_id, entity_type="prescription", entity_public_id=prescription.public_id)
     return get_prescription(db, prescription_id)
 
@@ -170,5 +214,6 @@ def dispense_prescription(db: Session, prescription_id: int) -> models.Prescript
             allocate_stock(db, item.medicine, item.quantity, "dispense", source_type="prescription", source_id=prescription.id)
         prescription.status = "dispensed"
         prescription.dispensed_at = datetime.now(timezone.utc)
+        emit_prescription(db, prescription, "updated")
         record_audit(db, "prescription.dispensed", pharmacy_id=prescription.pharmacy_id, entity_type="prescription", entity_public_id=prescription.public_id)
     return get_prescription(db, prescription_id)

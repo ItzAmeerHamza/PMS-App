@@ -8,6 +8,7 @@ from .. import models
 from ..core.audit import record_audit
 from ..core.transaction import business_transaction
 from ..inventory.service import allocate_stock, change_batch_quantity
+from ..prescriptions.service import emit_prescription
 from . import schemas
 
 CENT = Decimal("0.01")
@@ -208,6 +209,8 @@ def _create_sale(db: Session, payload: schemas.SaleCreate) -> models.Sale:
     )
     db.add(sale)
     db.flush()
+    # Set now so the sale's stock movement events can reference the bill.
+    sale.invoice_number = f"INV-{sale.id:06d}"
 
     subtotal = ZERO
     for medicine_id, quantity in _merge_lines(payload.items).items():
@@ -261,11 +264,10 @@ def _create_sale(db: Session, payload: schemas.SaleCreate) -> models.Sale:
     sale.total = total
     sale.amount_paid = amount_paid
     sale.change_due = _money(amount_paid - total)
-    sale.invoice_number = f"INV-{sale.id:06d}"
-
     if prescription:
         prescription.status = "dispensed"
         prescription.dispensed_at = datetime.now(timezone.utc)
+        emit_prescription(db, prescription, "updated")
         record_audit(db, "prescription.dispensed", pharmacy_id=sale.pharmacy_id, entity_type="prescription", entity_public_id=prescription.public_id)
 
     record_audit(db, "sale.created", pharmacy_id=sale.pharmacy_id, entity_type="sale")
@@ -288,6 +290,7 @@ def void_sale(db: Session, sale_id: int, reason: str | None) -> models.Sale | No
         if sale.prescription and sale.prescription.status == "dispensed":
             sale.prescription.status = "recorded"
             sale.prescription.dispensed_at = None
+            emit_prescription(db, sale.prescription, "updated")
         sale.status = "void"
         sale.voided_at = datetime.now(timezone.utc).replace(tzinfo=None)
         sale.void_reason = _blank(reason)

@@ -18,7 +18,10 @@ def data_dir(tmp_path, monkeypatch):
     path = tmp_path / "data"
     path.mkdir()
     monkeypatch.setenv("PHARMACARE_DATA_DIR", str(path))
+    monkeypatch.setenv("PHARMACARE_SYNC_AUTOSTART", "0")
     monkeypatch.delenv("PHARMACARE_DEMO_DATA", raising=False)
+    monkeypatch.delenv("CLOUD_API_URL", raising=False)
+    monkeypatch.delenv("PHARMACARE_CLOUD_API_URL", raising=False)
     database.init_engine(path / "pharmacy.db")
     yield path
     database.get_engine().dispose()

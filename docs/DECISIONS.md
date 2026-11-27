@@ -89,7 +89,7 @@ Use these files. Do not create parallel documents with the older names.
 | `docs/ARCHITECTURE.md` | a second architecture file |
 | `docs/SYNC_PROTOCOL.md` | a second sync spec |
 
-Deployment notes from later phases are added as `docs/RAILWAY_DEPLOYMENT.md`, `docs/VERCEL_DEPLOYMENT.md`, `docs/WINDOWS_PACKAGING.md`, `docs/BACKUP_AND_RECOVERY.md`, and `docs/LOCAL_DEVELOPMENT.md` when that phase starts. Until then, do not invent them. `docs/BACKUP_AND_RECOVERY.md` exists since phase 02, `docs/LOCAL_DEVELOPMENT.md` since phase 05.
+Deployment notes from later phases are added as `docs/RAILWAY_DEPLOYMENT.md`, `docs/VERCEL_DEPLOYMENT.md`, `docs/WINDOWS_PACKAGING.md`, `docs/BACKUP_AND_RECOVERY.md`, and `docs/LOCAL_DEVELOPMENT.md` when that phase starts. Until then, do not invent them. `docs/BACKUP_AND_RECOVERY.md` exists since phase 02, `docs/LOCAL_DEVELOPMENT.md` since phase 05, `docs/RAILWAY_DEPLOYMENT.md` since phase 07 Part A.
 
 ## 16. One baseline migration absorbs every pre-Alembic file (phase 02)
 
@@ -142,4 +142,68 @@ Reason: the phase asks for chronological history, while the counter needs the la
 ## 24. Prescriptions use the same pharmacy scope as patients (phase 05)
 
 `backend/src/core/scope.py` (`signed_in_pharmacy`, `visible`) is shared by patients and prescriptions. Inventory and billing still trust the request's `pharmacy_id` (see decision 22).
+
+## 25. Medicines are tombstoned too (phase 06)
+
+Deleting a medicine (still allowed only when it has no prescription, bill, or stock history) sets `medicines.deleted_at` and clears `is_active`. The row stays and `product.deleted` is emitted. The SKU stays reserved.
+
+Reason: `SYNC_PROTOCOL.md` requires the local row to stay for a delete event. Freeing the SKU would need the unique constraint to ignore tombstoned rows; not worth it for products that never had stock.
+
+## 26. Pre-existing rows and the dev seed write no events (phase 06)
+
+Migration `0005` does not backfill events, and `seed_if_empty` runs with the outbox disabled. Those rows reach the cloud through the initial bootstrap (phase 07 Part B).
+
+Reason: the bootstrap exists for exactly this, and backfilling events in a migration would mix two ordering schemes.
+
+## 27. Unchanged saves are not changes (phase 06)
+
+Updating a patient or medicine with the values it already has does not bump `version`, emit an event, or write an audit row (`Session.is_modified`).
+
+Reason: a screen that re-saves a form must not create sync traffic or version gaps the cloud would treat as ordering conflicts.
+
+## 28. A cloud shop's id is the desktop pharmacy's public_id (phase 07 Part A)
+
+`shops.id` in PostgreSQL is the same UUID the desktop writes into `sync_outbox.shop_id`. The owner registers a shop with that id and then issues a device credential for it.
+
+Reason: events already carry it, so the cloud can check every event against the device's shop without a mapping table, and a reinstall that keeps the database keeps its identity.
+
+## 29. Device secrets are high-entropy and stored as SHA-256 (phase 07 Part A)
+
+Device tokens are `pcd_<device id>.<secret>` with a 256-bit random secret; only `sha256(secret)` is stored. Owner passwords use Argon2id. Owner session tokens are random and stored as SHA-256.
+
+Reason: a slow password hash protects guessable secrets; a 256-bit random secret cannot be guessed, and a fast hash keeps every push cheap.
+
+## 30. A push stops at the first conflict, not at invalid events (phase 07 Part A)
+
+Events are applied in `sequence` order. After the first `ordering_conflict` or `retryable_error`, the rest of the batch is returned as `retryable_error` / `blocked_by_earlier_event` without being attempted. `invalid_event` does not stop the batch.
+
+Reason: `SYNC_PROTOCOL.md` says to acknowledge a prefix when in doubt, so dependent events cannot jump ahead; invalid events would otherwise block a shop forever.
+
+## 31. Cloud has stock_batches, owners, and owner_sessions beyond the planned list (phase 07 Part A)
+
+`stock_batches` gives the owner per-batch quantity and expiry; movements are still the only way quantities change. `owners` and `owner_sessions` let admin routes reject anonymous and device callers now; TOTP and cookie sessions come in phase 08.
+
+## 32. The device secret stays out of SQLite (phase 07 Part B)
+
+Windows uses DPAPI for the current user. macOS and Linux use a mode-0600 file in `<data dir>/secrets/`, which is git-ignored. The status API and the logs never return it. The cloud address may be saved on `sync_state`; an environment variable overrides it.
+
+Reason: the outbox database is backed up and sometimes copied for debugging. A secret in that file would travel with the copy. The same user who can read the pharmacy database can read this file; that is the shop PC's trust boundary until phase 09.
+
+## 33. Bootstrap is a second origin in the same outbox (phase 07 Part B)
+
+Pre-existing rows are inserted as `sync_outbox` rows with `origin='bootstrap'`, in dependency order, with a UUID5 event id. The worker uploads every unsent bootstrap row before any `live` row. A cursor on `sync_state` makes a restart continue the scan, and the stable event id makes a repeated scan harmless.
+
+Reason: live writes during the scan must not be dropped or reordered ahead of the patient or product they depend on, and the cloud already knows how to apply these events once.
+
+## 34. A connection failure backs off the worker, not each event (phase 07 Part B)
+
+Timeouts, DNS, connection loss, HTTP 429, and HTTP 5xx leave the rows `pending` and set `sync_state.backoff_until`. `Retry-After` is honored, capped at one hour. An `ordering_conflict` also leaves the row pending and at the front of the prefix, so a later event is not sent past it. Only `invalid_event` becomes `failed`.
+
+Reason: putting `next_attempt_at` on the one row that failed would make `list_pending` skip it and send the next row, which is how a prescription would jump ahead of its patient.
+
+## 35. The owner session stays on the Next.js server (phase 08)
+
+Password check and TOTP stay on the cloud API. The dashboard server stores the resulting session token in an HttpOnly cookie on its own origin and calls Railway with `Authorization: Bearer`. The browser receives `{ok: true}` after the code is accepted, not the token. Login, the code step, and sign-out must echo a CSRF value. Eight failed passwords for one email in 15 minutes return 429.
+
+Reason: a token in page JavaScript could be read by any script on the page. The database URL never belongs on Vercel.
 

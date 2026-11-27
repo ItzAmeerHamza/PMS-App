@@ -62,7 +62,7 @@ Shop PC (development, two processes started by hand)
     backups: <data dir>/backups (backend/src/core/backup.py)
 ```
 
-Electron does not start FastAPI. There is no sync worker, no cloud API, no owner dashboard, and no installer for the live app. Backend tests: `cd backend && .venv/bin/pytest`. `desktop/index.html` loads fonts from Google Fonts, so with no internet the UI falls back to system fonts. Nothing else in the UI needs the network.
+Electron does not start FastAPI. There is no owner dashboard and no installer for the live app. The local API starts a sync worker (phase 07 Part B); it uploads only after a device code is saved, and the shop works without one. The cloud API exists as `cloud-api/` (phase 07 Part A) but is not deployed. Backend tests: `cd backend && .venv/bin/pytest`. `desktop/index.html` loads fonts from Google Fonts, so with no internet the UI falls back to system fonts. The sync indicator is the only other UI that wants the network, and it fails soft.
 
 ### What the desktop UI actually calls
 
@@ -126,7 +126,7 @@ Since phase 03 the Inventory page has a **Stock** panel (`desktop/src/components
 
 | Area | Current | Target |
 | --- | --- | --- |
-| Desktop UI | Electron + React + Vite. Screens for dashboard, billing (list, counter, bill detail), inventory, patients, prescriptions. English, Urdu (RTL), and Roman Urdu. No screens for manual stock adjustment or patient editing. | Keep these screens. Add a small sync indicator and a diagnostic view. |
+| Desktop UI | Electron + React + Vite. Screens for dashboard, billing (list, counter, bill detail), inventory, patients, prescriptions, and sync. English, Urdu (RTL), and Roman Urdu. The shell shows a sync pill. No screens for manual stock adjustment or patient editing. **Sync indicator done in phase 07 Part B.** | Keep these screens. |
 | Local API | FastAPI on 127.0.0.1:8000, started manually. | Same API. Packaged backend starts with the app and binds only to 127.0.0.1 on an ephemeral port. |
 | Process model | Two terminals in development. | Electron owns the backend child process, waits for health, and stops it on quit. |
 | Database | One path helper (`backend/src/core/paths.py`): `backend/data/` in development, the per-user app-data folder when installed, `PHARMACARE_DATA_DIR` to override. Foreign keys and WAL on. Backups and restore exist. **Done in phase 02.** | Same. Electron must set `PHARMACARE_ENV=production` (or run the frozen binary) in phase 09. |
@@ -135,11 +135,11 @@ Since phase 03 the Inventory page has a **Stock** panel (`desktop/src/components
 | Identity | Integer primary keys plus `public_id` UUIDs on pharmacies, medicines, batches, patients, prescriptions, prescription items; `version` on medicines, patients, prescriptions. **Done in phase 02.** | Sales and movements get ids in later phases. |
 | Stock | Batches and FIFO kept. Every quantity change writes a `stock_movements` row in the same transaction (`change_batch_quantity`). **Done in phase 03.** | Keep batches and FIFO. Add an append-only stock movement for every quantity change. |
 | Auth | Shop manager session token (random hex, 14 days, in `staff_sessions`). Argon2id. First-run setup with a chosen password; no default account. Old PBKDF2 hashes upgrade on sign-in. Logins and writes are audited. **Done in phase 02.** | Owner auth is separate and adds TOTP. |
-| Sync | None. | Transactional `sync_outbox` in the same commit as the business write. Worker uploads later. |
-| Cloud | None. | Railway FastAPI + PostgreSQL. |
-| Owner UI | The in-app dashboard is the shop manager's home screen, not the owner's. | New Next.js app on Vercel. Read-only. |
+| Sync | Transactional `sync_outbox` (phase 06) plus a background worker, bootstrap, device-code file, and desktop indicator. **Done in phase 07 Part B.** Uploads only when a device code and a cloud address exist. | Same. Deploy the cloud when the owner asks. |
+| Cloud | `cloud-api/`: FastAPI + SQLAlchemy + Alembic on PostgreSQL. Sync ingest (`POST /api/v1/sync/push`, device credentials), owner login, shop and device management, six read-only admin routes. Tested on local PostgreSQL. **Not deployed** (`docs/RAILWAY_DEPLOYMENT.md`). Done in phase 07 Part A. | Deployed on Railway after an explicit go-ahead. |
+| Owner UI | `dashboard/`: Next.js owner app. Read-only shops, inventory, patients, prescriptions, and sync freshness. TOTP sign-in. Session cookie is HttpOnly on the Next.js origin. **Not deployed** (`docs/VERCEL_DEPLOYMENT.md`). Done in phase 08. | Deploy on Vercel after an explicit go-ahead. |
 | Packaging | Root `package.json` builds the unused "My Store" app. Live desktop has no electron-builder config. Fonts load from Google. | PyInstaller + electron-builder + NSIS for PharmaCare. Fonts bundled. |
-| Tests | `backend/tests/` (pytest), 42 tests after phase 03. No desktop tests. | Automated tests per phase. PostgreSQL for cloud integration tests. |
+| Tests | `backend/tests/` (pytest), 99 tests after phase 07 Part B. `cloud-api/tests/` 27 tests on PostgreSQL. No desktop tests. | Automated tests per phase. PostgreSQL for cloud integration tests. |
 
 ## Local request path
 
@@ -150,13 +150,13 @@ Since phase 03 the Inventory page has a **Stock** panel (`desktop/src/components
 
 UI components must not open SQLite. New writes go through the service layer so a later phase can insert an outbox row in the same transaction.
 
-## Cloud request path (not built)
+## Cloud request path
 
-1. Worker reads pending `sync_outbox` rows in a fixed order.
+1. The worker reads a prefix of pending `sync_outbox` rows. Bootstrap rows go before live rows.
 2. `POST /api/v1/sync/push` authenticates the device and derives `shop_id` from that credential.
 3. The cloud applies new events once, stores processed event ids, and commits.
 4. The worker marks events synchronized only after `applied` or `already_processed`.
-5. The owner dashboard calls admin read APIs with the owner session. Device credentials cannot call those routes.
+5. The owner dashboard (phase 08) will call admin read APIs with the owner session. Device credentials cannot call those routes.
 
 ## Repository layout to grow into
 

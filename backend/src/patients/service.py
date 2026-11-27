@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from .. import models
 from ..core.audit import record_audit
+from ..core.outbox import emit_event
 from ..core.scope import WrongPharmacy, signed_in_pharmacy, visible
 from ..core.transaction import business_transaction
 from . import schemas
@@ -55,6 +56,36 @@ def serialize_patient(patient: models.Patient) -> dict:
     }
 
 
+def patient_snapshot(patient: models.Patient) -> dict:
+    """Full patient snapshot for sync. Lives only in the outbox and the cloud, never in logs."""
+    return {
+        "public_id": patient.public_id,
+        "version": patient.version,
+        "first_name": patient.first_name,
+        "last_name": patient.last_name,
+        "phone": patient.phone,
+        "date_of_birth": patient.date_of_birth,
+        "gender": patient.gender,
+        "address": patient.address,
+        "allergies": patient.allergies,
+        "notes": patient.notes,
+        "deleted_at": patient.deleted_at,
+        "created_at": patient.created_at,
+        "updated_at": patient.updated_at,
+    }
+
+
+def emit_patient(db: Session, patient: models.Patient, operation: str) -> None:
+    db.flush()
+    db.refresh(patient)
+    if operation == "deleted":
+        payload = {"public_id": patient.public_id, "version": patient.version, "deleted_at": patient.deleted_at}
+    else:
+        payload = patient_snapshot(patient)
+    emit_event(db, pharmacy_id=patient.pharmacy_id, entity_type="patient", entity_id=patient.public_id,
+               operation=operation, entity_version=patient.version, payload=payload)
+
+
 def _with_history(db: Session):
     return db.query(models.Patient).options(joinedload(models.Patient.prescriptions))
 
@@ -95,6 +126,7 @@ def create_patient(db: Session, payload: schemas.PatientCreate) -> models.Patien
         patient = models.Patient(**data)
         db.add(patient)
         db.flush()
+        emit_patient(db, patient, "created")
         record_audit(db, "patient.created", pharmacy_id=patient.pharmacy_id, entity_type="patient", entity_public_id=patient.public_id)
     return get_patient(db, patient.id)
 
@@ -108,6 +140,9 @@ def update_patient(db: Session, patient_id: int, payload: schemas.PatientUpdate)
     with business_transaction(db):
         for field, value in payload.model_dump(exclude_unset=True).items():
             setattr(patient, field, value)
+        if not db.is_modified(patient, include_collections=False):
+            return patient  # same values saved again: no version bump, no event, no audit
+        emit_patient(db, patient, "updated")
         record_audit(db, "patient.updated", pharmacy_id=patient.pharmacy_id, entity_type="patient", entity_public_id=patient.public_id)
     return get_patient(db, patient_id)
 
@@ -121,5 +156,6 @@ def delete_patient(db: Session, patient_id: int) -> bool:
         return True
     with business_transaction(db):
         patient.deleted_at = datetime.now(timezone.utc)
+        emit_patient(db, patient, "deleted")
         record_audit(db, "patient.deleted", pharmacy_id=patient.pharmacy_id, entity_type="patient", entity_public_id=patient.public_id)
     return True

@@ -13,6 +13,7 @@ import PrescriptionForm from "./pages/PrescriptionForm";
 import PrescriptionDetail from "./pages/PrescriptionDetail";
 import SaleDetail from "./pages/SaleDetail";
 import SaleForm from "./pages/SaleForm";
+import Sync from "./pages/Sync";
 
 function RequireAuth() {
   const { staff, ready } = useSession();
@@ -39,6 +40,7 @@ export default function App() {
             <Route path="/billing" element={<Billing />} />
             <Route path="/billing/new" element={<SaleForm />} />
             <Route path="/billing/:id" element={<SaleDetail />} />
+            <Route path="/sync" element={<Sync />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Route>

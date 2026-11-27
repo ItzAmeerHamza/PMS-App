@@ -2,7 +2,7 @@
 
 Written in phase 05 (26 November 2026). Commands were run on macOS with Python 3.14.6 and Node.js 24.3.0. Windows has not been tried yet; on Windows use `.venv\Scripts\python` where this page says `.venv/bin/python`.
 
-The desktop app needs no internet and no cloud settings. It talks only to the local API on `127.0.0.1:8000`. There is no `CLOUD_API_URL` yet; sync starts in phase 06.
+The desktop app needs no internet and no cloud settings to sell, stock, and record patients. It talks only to the local API on `127.0.0.1:8000`. A sync worker starts with that API and does nothing until the Sync page has a device code. Set `CLOUD_API_URL` (or `PHARMACARE_CLOUD_API_URL`) to the cloud API origin, for example `http://127.0.0.1:8800`, or type that address on the Sync page. `PHARMACARE_SYNC_AUTOSTART=0` leaves the worker thread off.
 
 ## One-time setup
 
@@ -98,3 +98,53 @@ cd backend
 sqlite3 data/pharmacy.db ".tables"
 .venv/bin/python -m src.backup_cli list
 ```
+
+## Cloud API (`cloud-api/`, phase 07 Part A)
+
+Separate app with its own virtualenv. The desktop backend does not import it and starts without it.
+
+```bash
+cd cloud-api
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+```
+
+It needs PostgreSQL. On the development Mac, Homebrew PostgreSQL 14 runs on `localhost:5432` with two databases created for this project: `pharmacare_cloud_dev` (manual runs) and `pharmacare_cloud_test` (tests; its schema is dropped and rebuilt on every test run).
+
+Run it:
+
+```bash
+cd cloud-api
+export DATABASE_URL=postgresql://localhost/pharmacare_cloud_dev
+.venv/bin/alembic upgrade head
+OWNER_PASSWORD='<at least 12 characters>' .venv/bin/python -m app.cli create-owner --email you@example.com
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8800
+```
+
+API docs: `http://127.0.0.1:8800/docs`. Owner sign-in is a password step and then a TOTP code (`GET /api/v1/owner/csrf`, then `POST /api/v1/owner/login`, then `POST /api/v1/owner/totp`). The first sign-in shows an authenticator key. Register a shop and issue a device token as in `docs/RAILWAY_DEPLOYMENT.md`.
+
+## Owner dashboard (`dashboard/`)
+
+```bash
+cd dashboard
+npm install
+CLOUD_API_URL=http://127.0.0.1:8800 npm run dev
+```
+
+Opens `http://127.0.0.1:3000`. The page talks to the Next.js server. That server calls the cloud API. `npm test` runs the dashboard checks. `npm run build` writes `.next/`.
+
+Tests:
+
+```bash
+cd cloud-api
+.venv/bin/pytest            # uses CLOUD_TEST_DATABASE_URL, default postgresql+psycopg://localhost/pharmacare_cloud_test
+```
+
+If PostgreSQL is not reachable, every cloud test is reported as skipped with the reason; none is reported as passed.
+
+`tests/fixtures/desktop_events.json` holds synthetic events exported from the real desktop outbox. Regenerate it after changing an event payload on the desktop:
+
+```bash
+cd backend && .venv/bin/python ../cloud-api/tests/make_desktop_fixture.py
+```
+

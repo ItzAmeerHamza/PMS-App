@@ -2,8 +2,8 @@
 
     with business_transaction(db):
         ... change rows ...
+        emit_event(db, ...)      # sync_outbox row (core/outbox.py)
         record_audit(db, ...)
-        # phase 06: the sync_outbox row is added here, before commit
 
 Everything inside the block commits together or rolls back together. Nested use
 (one service calling another) joins the outer transaction instead of committing early.
@@ -31,3 +31,7 @@ def business_transaction(db: Session):
         raise
     finally:
         db.info[_FLAG] = depth
+        if depth == 0:
+            from .outbox import reset_transaction_state  # local import: outbox imports models
+
+            reset_transaction_state(db)

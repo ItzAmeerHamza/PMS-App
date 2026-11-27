@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -91,6 +91,8 @@ class Medicine(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    # Tombstone (phase 06). The row stays so a product.deleted event can describe it.
+    deleted_at = Column(DateTime(timezone=True), index=True)
 
     pharmacy = relationship("Pharmacy", back_populates="medicines")
     batches = relationship("StockBatch", back_populates="medicine", cascade="all, delete-orphan")
@@ -305,3 +307,82 @@ class StockMovement(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
 
     batch = relationship("StockBatch", back_populates="movements")
+
+
+OUTBOX_STATUSES = ("pending", "synced", "retryable_error", "failed")
+OUTBOX_ORIGINS = ("live", "bootstrap")
+BOOTSTRAP_STATUSES = ("not_started", "running", "complete")
+BOOTSTRAP_STAGES = ("products", "movements", "patients", "prescriptions", "done")
+
+
+class SyncOutbox(Base):
+    """Durable sync events, written in the same transaction as the business change.
+
+    See docs/SYNC_PROTOCOL.md. The payload is an immutable JSON snapshot; nothing
+    updates it after insert. Rows are not deleted when acknowledged (retention).
+
+    ``origin`` is ``live`` for a change made at the counter, or ``bootstrap`` for the
+    one-time upload of rows that existed before sync was turned on. The worker sends
+    every pending bootstrap event before any live event.
+    """
+
+    __tablename__ = "sync_outbox"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'synced', 'retryable_error', 'failed')", name="ck_sync_outbox_status"
+        ),
+        CheckConstraint("operation IN ('created', 'updated', 'deleted')", name="ck_sync_outbox_operation"),
+        CheckConstraint("origin IN ('live', 'bootstrap')", name="ck_sync_outbox_origin"),
+        Index("ix_sync_outbox_pending", "status", "next_attempt_at", "sequence"),
+        Index("ix_sync_outbox_origin", "origin", "status", "sequence"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    sequence = Column(Integer, nullable=False, unique=True)
+    event_id = Column(String(36), nullable=False, unique=True)
+    shop_id = Column(String(36), nullable=False)
+    entity_type = Column(String(40), nullable=False)
+    entity_id = Column(String(36), nullable=False, index=True)
+    operation = Column(String(10), nullable=False)
+    entity_version = Column(Integer, nullable=False)
+    schema_version = Column(Integer, nullable=False, default=1, server_default="1")
+    payload = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    status = Column(String(20), nullable=False, default="pending", server_default="pending")
+    retry_count = Column(Integer, nullable=False, default=0, server_default="0")
+    next_attempt_at = Column(DateTime(timezone=True))
+    last_error = Column(String(255))
+    synced_at = Column(DateTime(timezone=True))
+    origin = Column(String(20), nullable=False, default="live", server_default="live")
+
+
+class SyncState(Base):
+    """One row per shop: activation, bootstrap progress, and the last sync outcome.
+
+    The device secret is not stored here. It lives in the protected credential file
+    (``src/sync/secrets.py``). ``last_error`` is a short code, never a payload.
+    """
+
+    __tablename__ = "sync_state"
+    __table_args__ = (
+        CheckConstraint(
+            "bootstrap_status IN ('not_started', 'running', 'complete')", name="ck_sync_state_bootstrap_status"
+        ),
+        CheckConstraint(
+            "bootstrap_stage IN ('products', 'movements', 'patients', 'prescriptions', 'done')",
+            name="ck_sync_state_bootstrap_stage",
+        ),
+    )
+
+    pharmacy_id = Column(Integer, ForeignKey("pharmacies.id"), primary_key=True)
+    bootstrap_status = Column(String(20), nullable=False, default="not_started", server_default="not_started")
+    bootstrap_stage = Column(String(20), nullable=False, default="products", server_default="products")
+    bootstrap_cursor = Column(Integer, nullable=False, default=0, server_default="0")
+    last_success_at = Column(DateTime(timezone=True))
+    last_acknowledged_sequence = Column(Integer)
+    last_error = Column(String(255))
+    last_error_at = Column(DateTime(timezone=True))
+    backoff_until = Column(DateTime(timezone=True))
+    backoff_attempt = Column(Integer, nullable=False, default=0, server_default="0")
+    activated_at = Column(DateTime(timezone=True))
+    cloud_api_url = Column(String(500))

@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from . import models
+from .core.outbox import DISABLED as outbox_disabled_key
 from .inventory.service import receive_new_batch
 
 
@@ -13,6 +14,9 @@ def seed_if_empty(db: Session) -> None:
     """
     if db.query(models.Pharmacy).first():
         return
+
+    # Seed rows are "pre-existing data": no sync events. The phase 07 bootstrap uploads them.
+    db.info[outbox_disabled_key] = True
 
     pharmacy = models.Pharmacy(
         name="City Care Pharmacy",
@@ -284,3 +288,4 @@ def seed_if_empty(db: Session) -> None:
     )
 
     db.commit()
+    db.info.pop(outbox_disabled_key, None)
